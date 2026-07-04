@@ -41,11 +41,136 @@ TEXT_MUTED = "#8B7E9A"
 BTN_PRIMARY = "#B9A6E8"
 BTN_PRIMARY_HOVER = "#A88EDE"
 
+# Bolder / more saturated variants, used on the home screen for extra punch
+BOLD_LAVENDER = "#B08CF0"
+BOLD_PINK = "#FF6FAE"
+BOLD_PEACH = "#FF9B54"
+BOLD_SKY = "#5AB8FF"
+BOLD_MINT = "#4FD8A0"
+BTN_BOLD = "#8B5CF6"
+BTN_BOLD_HOVER = "#7C3AED"
+
+# --- "Nerdy" dark theme, used on the home screen ---
+DARK_BG = "#0D1117"       # GitHub dark background
+DARK_PANEL = "#161B22"    # slightly lighter panel
+DARK_BORDER = "#30363D"
+ACCENT_GREEN = "#3FB950"
+ACCENT_GREEN_HOVER = "#2EA043"
+ACCENT_CYAN = "#58A6FF"
+TEXT_LIGHT = "#C9D1D9"
+TEXT_DIM = "#8B949E"
+DOT_COLOR = "#4A5560"  # brighter than the border color so the moving grid is actually visible
+MONO_FONT = "Consolas"  # monospace, ships with Windows; falls back gracefully elsewhere
+
 # Extra-light tints used only for the background doodle cluster
 DOODLE_COLORS = ["#F3ECFB", "#FCE9F1", "#E9F8EF", "#EAF4FD", "#FDF0E6"]
 
 RECENT_SEARCHES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recent_searches.json")
 MAX_RECENT = 6
+
+
+def round_rect_points(x1, y1, x2, y2, r):
+    """Returns a point list that renders as a rounded rectangle when
+    passed to canvas.create_polygon(..., smooth=True)."""
+    return [
+        x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
+        x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
+        x1, y2, x1, y2 - r, x1, y1 + r, x1, y1,
+    ]
+
+
+class RoundedButton(tk.Canvas):
+    """A clickable button with rounded corners, drawn on a Canvas since
+    plain tk/ttk buttons can't have rounded corners. On hover it pops:
+    grows slightly larger, then shrinks back to normal size on leave."""
+
+    GROW = 5  # px of padding reserved on each side so the shape can grow without resizing the widget
+
+    def __init__(self, parent, text, command, bg_color, hover_color,
+                 fg="white", font=("Segoe UI", 12, "bold"), radius=20,
+                 width=200, height=48, parent_bg=None, border_color=None, border_width=0):
+        canvas_w = width + self.GROW * 2
+        canvas_h = height + self.GROW * 2
+        super().__init__(parent, width=canvas_w, height=canvas_h,
+                          bg=parent_bg or parent["bg"], highlightthickness=0)
+        self.command = command
+        self.bg_color = bg_color
+        self.hover_color = hover_color
+        self.fg = fg
+        self.font = font
+        self.radius = radius
+        self.base_w = width
+        self.base_h = height
+        self.text = text
+        self.border_color = border_color
+        self.border_width = border_width
+
+        self.hovered = False
+        self.inset = float(self.GROW)       # current inset from canvas edge (large = normal/small size)
+        self.target_inset = float(self.GROW)
+        self._animating = False
+
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self._render()
+
+    def _render(self):
+        self.delete("all")
+        x1, y1 = self.inset, self.inset
+        x2, y2 = self.inset + self.base_w, self.inset + self.base_h
+        color = self.hover_color if self.hovered else self.bg_color
+        points = round_rect_points(x1, y1, x2, y2, self.radius)
+        self.create_polygon(points, smooth=True, fill=color,
+                             outline=self.border_color or "", width=self.border_width)
+        self.create_text((x1 + x2) / 2, (y1 + y2) / 2, text=self.text, fill=self.fg, font=self.font)
+
+    def set_text(self, text):
+        self.text = text
+        self._render()
+
+    def _on_enter(self, event):
+        self.config(cursor="hand2")
+        self.hovered = True
+        self._animate_to(0.0)  # inset shrinks to 0 -> shape fills the padded canvas -> looks larger
+
+    def _on_leave(self, event):
+        self.hovered = False
+        self._animate_to(float(self.GROW))  # back to normal size
+
+    def _animate_to(self, target):
+        self.target_inset = target
+        if not self._animating:
+            self._animating = True
+            self._step_animation()
+
+    def _step_animation(self):
+        diff = self.target_inset - self.inset
+        if abs(diff) < 0.4:
+            self.inset = self.target_inset
+            self._render()
+            self._animating = False
+            return
+        self.inset += diff * 0.45  # ease toward target for a smooth pop
+        self._render()
+        self.after(12, self._step_animation)
+
+    def _on_click(self, event):
+        if self.command:
+            self.command()
+
+
+def make_rounded_entry(parent, width_px=300, height_px=46, radius=18, show=None,
+                        fill=CARD, border=LAVENDER, font=("Segoe UI", 12)):
+    """Returns (canvas, entry). The canvas draws a rounded pill background;
+    the plain tk.Entry is embedded inside it borderless so it blends in."""
+    canvas = tk.Canvas(parent, width=width_px, height=height_px,
+                        bg=parent["bg"], highlightthickness=0)
+    points = round_rect_points(1, 1, width_px - 1, height_px - 1, radius)
+    canvas.create_polygon(points, smooth=True, fill=fill, outline=border, width=2)
+    entry = tk.Entry(canvas, font=font, bd=0, highlightthickness=0, bg=fill, fg=TEXT_DARK, show=show)
+    canvas.create_window(width_px / 2, height_px / 2, window=entry, width=width_px - 34, height=height_px - 16)
+    return canvas, entry
 
 FONT_TITLE = ("Segoe UI", 26, "bold")
 FONT_SUBTITLE = ("Segoe UI", 12)
@@ -61,9 +186,9 @@ class GitHubAnalyzerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("GitHub Profile Analyzer")
-        self.geometry("980x680")
+        self.geometry("1920x1080")
         self.configure(bg=BG)
-        self.minsize(820, 600)
+        self.minsize(1150, 700)
 
         # Shared state passed between screens
         self.username = ""
@@ -71,6 +196,7 @@ class GitHubAnalyzerApp(tk.Tk):
         self.top_n = 5
         self.data = None
         self.recent_searches = self._load_recent_searches()
+        self.current_screen = None
 
         container = tk.Frame(self, bg=BG)
         container.pack(fill="both", expand=True)
@@ -86,6 +212,7 @@ class GitHubAnalyzerApp(tk.Tk):
         self.show_screen(HomeScreen)
 
     def show_screen(self, screen_class):
+        self.current_screen = screen_class
         frame = self.frames[screen_class]
         frame.tkraise()
         if hasattr(frame, "on_show"):
@@ -150,80 +277,90 @@ class GitHubAnalyzerApp(tk.Tk):
 # SCREEN 1: Home / Search
 # =======================================================================
 class HomeScreen(tk.Frame):
-    """Split-screen layout: vibrant gradient brand panel on the left,
-    clean white form panel on the right."""
+    """Split-screen layout, dark 'developer tool' aesthetic: a terminal-style
+    brand panel on the left, a matching dark form panel on the right."""
 
-    LEFT_FRAC = 42  # left panel width as a percentage (grid weight)
+    LEFT_FRAC = 42
     RIGHT_FRAC = 58
 
     def __init__(self, parent, app):
-        super().__init__(parent, bg=CARD)
+        super().__init__(parent, bg=DARK_PANEL)
         self.app = app
         self.token_visible = False
+        self.dot_offset = 0
+        self._dots_animating = False
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=self.LEFT_FRAC)
         self.grid_columnconfigure(1, weight=self.RIGHT_FRAC)
 
-        # ---------------- LEFT: brand / illustration panel ----------------
-        self.left_canvas = tk.Canvas(self, highlightthickness=0, bd=0)
+        # ---------------- LEFT: terminal / mark panel ----------------
+        self.left_canvas = tk.Canvas(self, highlightthickness=0, bd=0, bg=DARK_BG)
         self.left_canvas.grid(row=0, column=0, sticky="nsew")
         self.left_canvas.bind("<Configure>", self._draw_left_panel)
 
         # ---------------- RIGHT: form panel ----------------
-        right = tk.Frame(self, bg=CARD)
+        right = tk.Frame(self, bg=DARK_PANEL)
         right.grid(row=0, column=1, sticky="nsew")
 
-        form_wrap = tk.Frame(right, bg=CARD)
+        form_wrap = tk.Frame(right, bg=DARK_PANEL)
         form_wrap.place(relx=0.5, rely=0.5, anchor="center")
 
-        tk.Label(form_wrap, text="Welcome back", font=("Segoe UI", 22, "bold"),
-                 bg=CARD, fg=TEXT_DARK).pack(anchor="w")
-        tk.Label(form_wrap, text="Analyze any public GitHub profile in seconds",
-                 font=("Segoe UI", 11), bg=CARD, fg=TEXT_MUTED).pack(anchor="w", pady=(2, 28))
+        tk.Label(form_wrap, text="$ Analyze --user", font=(MONO_FONT, 20, "bold"),
+                 bg=DARK_PANEL, fg=ACCENT_GREEN).pack(anchor="w")
+        tk.Label(form_wrap, text="// Pull public stats for any GitHub profile",
+                 font=(MONO_FONT, 10), bg=DARK_PANEL, fg=TEXT_DIM).pack(anchor="w", pady=(2, 28))
 
-        tk.Label(form_wrap, text="GITHUB USERNAME", font=("Segoe UI", 9, "bold"),
-                 bg=CARD, fg=TEXT_MUTED).pack(anchor="w", pady=(0, 4))
-        self.username_entry = ttk.Entry(form_wrap, font=("Segoe UI", 13), width=30)
-        self.username_entry.pack(anchor="w", ipady=4, pady=(0, 18))
+        tk.Label(form_wrap, text="USERNAME", font=(MONO_FONT, 9, "bold"),
+                 bg=DARK_PANEL, fg=TEXT_DIM).pack(anchor="w", pady=(0, 4))
+        username_canvas, self.username_entry = make_rounded_entry(
+            form_wrap, width_px=340, height_px=46, radius=23, fill=DARK_BG,
+            border=DARK_BORDER, font=(MONO_FONT, 12)
+        )
+        self.username_entry.config(fg=TEXT_LIGHT, insertbackground=ACCENT_GREEN)
+        username_canvas.pack(anchor="w", pady=(0, 18))
         self.username_entry.insert(0, "octocat")
         self.username_entry.bind("<Return>", lambda e: self.on_analyze())
 
-        tk.Label(form_wrap, text="PERSONAL ACCESS TOKEN (OPTIONAL)", font=("Segoe UI", 9, "bold"),
-                 bg=CARD, fg=TEXT_MUTED).pack(anchor="w", pady=(0, 4))
-        token_row = tk.Frame(form_wrap, bg=CARD)
+        tk.Label(form_wrap, text="ACCESS TOKEN (OPTIONAL)", font=(MONO_FONT, 9, "bold"),
+                 bg=DARK_PANEL, fg=TEXT_DIM).pack(anchor="w", pady=(0, 4))
+        token_row = tk.Frame(form_wrap, bg=DARK_PANEL)
         token_row.pack(anchor="w", pady=(0, 18))
-        self.token_entry = ttk.Entry(token_row, font=("Segoe UI", 13), width=25, show="*")
-        self.token_entry.pack(side="left", ipady=4)
-        self.token_toggle_btn = tk.Button(
-            token_row, text="👁", font=("Segoe UI", 10), bg=PEACH, fg=TEXT_DARK, relief="flat",
-            width=3, cursor="hand2", command=self._toggle_token_visibility
+        token_canvas, self.token_entry = make_rounded_entry(
+            token_row, width_px=278, height_px=46, radius=23, show="*", fill=DARK_BG,
+            border=DARK_BORDER, font=(MONO_FONT, 12)
         )
-        self.token_toggle_btn.pack(side="left", padx=(6, 0), ipady=2)
+        self.token_entry.config(fg=TEXT_LIGHT, insertbackground=ACCENT_GREEN)
+        token_canvas.pack(side="left")
+        self.token_toggle_btn = RoundedButton(
+            token_row, text="Show", command=self._toggle_token_visibility,
+            bg_color=DARK_BG, hover_color=DARK_BORDER, fg=ACCENT_CYAN,
+            font=(MONO_FONT, 9, "bold"), radius=23, width=54, height=46,
+            parent_bg=DARK_PANEL, border_color=DARK_BORDER, border_width=1
+        )
+        self.token_toggle_btn.pack(side="left", padx=(8, 0))
 
-        topn_row = tk.Frame(form_wrap, bg=CARD)
+        topn_row = tk.Frame(form_wrap, bg=DARK_PANEL)
         topn_row.pack(anchor="w", pady=(0, 26))
-        tk.Label(topn_row, text="Top repos to show:", font=FONT_BODY, bg=CARD, fg=TEXT_DARK).pack(side="left")
+        tk.Label(topn_row, text="Top repos:", font=(MONO_FONT, 10), bg=DARK_PANEL, fg=TEXT_LIGHT).pack(side="left")
         self.top_n_var = tk.StringVar(value="5")
         ttk.Spinbox(topn_row, from_=1, to=20, width=5, textvariable=self.top_n_var).pack(side="left", padx=(8, 0))
 
-        self.analyze_btn = tk.Button(
-            form_wrap, text="Analyze Profile  →", font=("Segoe UI", 12, "bold"), bg=BTN_PRIMARY, fg="white",
-            activebackground=BTN_PRIMARY_HOVER, relief="flat", padx=28, pady=12,
-            cursor="hand2", command=self.on_analyze
+        self.analyze_btn = RoundedButton(
+            form_wrap, text="▶  Run Analysis", command=self.on_analyze,
+            bg_color=ACCENT_GREEN, hover_color=ACCENT_GREEN_HOVER, fg=DARK_BG,
+            font=(MONO_FONT, 13, "bold"), radius=27, width=340, height=54, parent_bg=DARK_PANEL
         )
-        self.analyze_btn.pack(anchor="w", fill="x")
-        self.analyze_btn.bind("<Enter>", lambda e: self.analyze_btn.config(bg=BTN_PRIMARY_HOVER))
-        self.analyze_btn.bind("<Leave>", lambda e: self.analyze_btn.config(bg=BTN_PRIMARY))
+        self.analyze_btn.pack(anchor="w")
 
-        tk.Label(form_wrap, text="Tip: add a token to raise your rate limit from 60 to 5,000 requests/hour",
-                 font=("Segoe UI", 8), bg=CARD, fg=TEXT_MUTED, wraplength=320, justify="left").pack(
+        tk.Label(form_wrap, text="# Tip: add a token to raise rate limit 60 -> 5,000 req/hr",
+                 font=(MONO_FONT, 8), bg=DARK_PANEL, fg=TEXT_DIM, wraplength=340, justify="left").pack(
             anchor="w", pady=(10, 0)
         )
 
-        self.recent_label = tk.Label(form_wrap, text="RECENT SEARCHES", font=("Segoe UI", 9, "bold"),
-                                      bg=CARD, fg=TEXT_MUTED)
-        self.recent_frame = tk.Frame(form_wrap, bg=CARD)
+        self.recent_label = tk.Label(form_wrap, text="RECENT", font=(MONO_FONT, 9, "bold"),
+                                      bg=DARK_PANEL, fg=TEXT_DIM)
+        self.recent_frame = tk.Frame(form_wrap, bg=DARK_PANEL)
 
         self.form_wrap = form_wrap
 
@@ -231,22 +368,11 @@ class HomeScreen(tk.Frame):
     def _toggle_token_visibility(self):
         self.token_visible = not self.token_visible
         self.token_entry.config(show="" if self.token_visible else "*")
-        self.token_toggle_btn.config(text="🙈" if self.token_visible else "👁")
+        self.token_toggle_btn.set_text("Hide" if self.token_visible else "Show")
 
     # ------------------------------------------------------------------
-    # Left panel: gradient background + doodle illustration + copy
+    # Left panel: dark terminal background + original cat/octopus mark
     # ------------------------------------------------------------------
-    @staticmethod
-    def _lerp_color(c1, c2, t):
-        c1 = c1.lstrip("#")
-        c2 = c2.lstrip("#")
-        r1, g1, b1 = int(c1[0:2], 16), int(c1[2:4], 16), int(c1[4:6], 16)
-        r2, g2, b2 = int(c2[0:2], 16), int(c2[2:4], 16), int(c2[4:6], 16)
-        r = round(r1 + (r2 - r1) * t)
-        g = round(g1 + (g2 - g1) * t)
-        b = round(b1 + (b2 - b1) * t)
-        return f"#{r:02x}{g:02x}{b:02x}"
-
     def _draw_left_panel(self, event=None):
         c = self.left_canvas
         c.delete("all")
@@ -255,76 +381,101 @@ class HomeScreen(tk.Frame):
         if w < 10 or h < 10:
             return
 
-        # Diagonal-feeling vertical gradient: lavender -> pink -> peach
-        steps = 60
-        for i in range(steps):
-            t = i / steps
-            if t < 0.5:
-                color = self._lerp_color(LAVENDER, PINK, t * 2)
-            else:
-                color = self._lerp_color(PINK, PEACH, (t - 0.5) * 2)
-            y0 = h * i / steps
-            y1 = h * (i + 1) / steps
-            c.create_rectangle(0, y0, w, y1 + 1, fill=color, outline="")
+        c.create_rectangle(0, 0, w, h, fill=DARK_BG, outline="", tags="bg_rect")
 
-        # Big badge icon
-        badge_r = 46
-        bx, by = w * 0.5, h * 0.20
-        c.create_oval(bx - badge_r, by - badge_r, bx + badge_r, by + badge_r,
-                       fill="#FFFFFF", outline="")
-        c.create_text(bx, by, text="🐙", font=("Segoe UI", 38))
+        # --- Original cat + tentacle mark (not a copy of any existing logo) ---
+        cx, cy = w * 0.5, h * 0.18
+        badge_r = 44
+        c.create_oval(cx - badge_r, cy - badge_r, cx + badge_r, cy + badge_r,
+                       fill=ACCENT_GREEN, outline="")
+        # cat ears
+        c.create_polygon(cx - 26, cy - 18, cx - 8, cy - 40, cx - 4, cy - 14,
+                          fill=DARK_BG, outline="")
+        c.create_polygon(cx + 26, cy - 18, cx + 8, cy - 40, cx + 4, cy - 14,
+                          fill=DARK_BG, outline="")
+        # face
+        c.create_oval(cx - 22, cy - 20, cx + 22, cy + 16, fill=DARK_BG, outline="")
+        # eyes
+        c.create_oval(cx - 10, cy - 6, cx - 5, cy - 1, fill=ACCENT_GREEN, outline="")
+        c.create_oval(cx + 5, cy - 6, cx + 10, cy - 1, fill=ACCENT_GREEN, outline="")
+        # tentacle legs beneath the face
+        for i, dx in enumerate([-18, -8, 0, 8, 18]):
+            start_x = cx + dx
+            start_y = cy + 14
+            wobble = 6 if i % 2 == 0 else -6
+            c.create_line(
+                start_x, start_y, start_x + wobble, start_y + 14, start_x, start_y + 26,
+                fill=DARK_BG, width=5, smooth=True, capstyle="round"
+            )
 
-        c.create_text(w * 0.5, h * 0.34, text="GitHub Profile\nAnalyzer",
-                       font=("Segoe UI", 22, "bold"), fill=TEXT_DARK, justify="center")
-        c.create_text(w * 0.5, h * 0.42, text="Deep-dive into any public profile",
-                       font=("Segoe UI", 10), fill=TEXT_DARK, justify="center")
+        c.create_text(w * 0.5, h * 0.32, text="GitHub Profile Analyzer",
+                       font=(MONO_FONT, 18, "bold"), fill=TEXT_LIGHT, justify="center")
+        c.create_text(w * 0.5, h * 0.375, text="> Deep-dive into any public profile_",
+                       font=(MONO_FONT, 10), fill=ACCENT_GREEN, justify="center")
 
-        # Feature list
+        # Terminal-style feature list, like commented-out code
         features = [
-            "⭐  Ranked top repositories",
-            "🧩  Language breakdown",
-            "📊  Visual charts",
-            "⚡  Fast, no login required",
+            "// Ranked top repositories",
+            "// Language breakdown",
+            "// Visual charts",
+            "// No login required",
         ]
-        start_y = h * 0.55
+        start_y = h * 0.52
         for i, feat in enumerate(features):
-            c.create_text(w * 0.5, start_y + i * 34, text=feat, font=("Segoe UI", 11),
-                           fill=TEXT_DARK, anchor="center")
+            c.create_text(w * 0.5, start_y + i * 30, text=feat, font=(MONO_FONT, 11),
+                           fill=TEXT_DIM, anchor="center")
 
-        # Decorative doodles scattered around the edges (kept clear of text)
-        self._draw_star(c, w * 0.15, h * 0.10, 10, "#FFFFFF")
-        self._draw_star(c, w * 0.85, h * 0.08, 7, "#FFFFFF")
-        self._draw_star(c, w * 0.90, h * 0.62, 9, "#FFFFFF")
-        self._draw_star(c, w * 0.12, h * 0.88, 8, "#FFFFFF")
-        self._draw_commit_trail(c, w * 0.68, h * 0.90, "#FFFFFF")
-        for fx, fy, r in [(0.08, 0.5, 4), (0.92, 0.35, 5), (0.2, 0.7, 3), (0.8, 0.15, 4)]:
-            x, y = w * fx, h * fy
-            c.create_oval(x - r, y - r, x + r, y + r, fill="#FFFFFF", outline="")
+        # Small git-graph doodle near the bottom
+        self._draw_git_graph(c, w * 0.5, h * 0.78)
 
-    def _draw_star(self, c, cx, cy, size, color):
-        points = []
-        for i in range(10):
-            angle = math.pi / 5 * i - math.pi / 2
-            r = size if i % 2 == 0 else size * 0.45
-            points.append(cx + r * math.cos(angle))
-            points.append(cy + r * math.sin(angle))
-        c.create_polygon(points, fill=color, outline="")
+        # Animated dot-grid texture, drawn last then sent behind everything else
+        self._draw_dots()
+        c.tag_raise("dots", "bg_rect")
 
-    def _draw_commit_trail(self, c, x, y, color):
-        for i in range(4):
-            cx = x + i * 20
-            cy = y + (i % 2) * 14
-            c.create_oval(cx - 4, cy - 4, cx + 4, cy + 4, fill=color, outline="")
-            if i > 0:
-                px = x + (i - 1) * 20
-                py = y + ((i - 1) % 2) * 14
-                c.create_line(px, py, cx, cy, fill=color, width=2)
+    def _draw_dots(self):
+        """Draws the drifting dot-grid texture. Called on a timer to animate,
+        and after every full redraw (resize) to keep it in sync."""
+        c = self.left_canvas
+        c.delete("dots")
+        w = c.winfo_width()
+        h = c.winfo_height()
+        if w < 10 or h < 10:
+            return
+        step = 34
+        offset = self.dot_offset % step
+        for gx in range(-step, int(w) + step, step):
+            for gy in range(-step, int(h) + step, step):
+                x, y = gx + offset, gy + offset
+                c.create_oval(x - 1.5, y - 1.5, x + 1.5, y + 1.5, fill=DOT_COLOR, outline="", tags="dots")
+
+    def _animate_dots(self):
+        if self.app.current_screen is not HomeScreen:
+            self._dots_animating = False
+            return
+        self.dot_offset = (self.dot_offset + 1.2) % 34
+        self._draw_dots()
+        self.left_canvas.tag_raise("dots", "bg_rect")
+        self.after(40, self._animate_dots)
+
+    def _draw_git_graph(self, c, cx, cy):
+        color = ACCENT_CYAN
+        c.create_line(cx - 60, cy, cx - 60, cy + 50, fill=color, width=3)
+        c.create_line(cx - 60, cy + 15, cx, cy + 15, fill=color, width=3)
+        c.create_line(cx, cy + 15, cx, cy + 50, fill=color, width=3)
+        c.create_line(cx + 60, cy, cx + 60, cy + 30, fill=color, width=3)
+        c.create_line(cx + 60, cy + 30, cx, cy + 45, fill=color, width=3)
+        for px, py in [(cx - 60, cy), (cx - 60, cy + 50), (cx, cy + 15),
+                       (cx, cy + 50), (cx + 60, cy), (cx + 60, cy + 30)]:
+            c.create_oval(px - 5, py - 5, px + 5, py + 5, fill=DARK_BG, outline=color, width=2)
 
     # ------------------------------------------------------------------
     def on_show(self):
         self.username_entry.focus_set()
         self._refresh_recent_chips()
         self.after(50, self._draw_left_panel)
+        if not self._dots_animating:
+            self._dots_animating = True
+            self.after(40, self._animate_dots)
 
     def _refresh_recent_chips(self):
         for widget in self.recent_frame.winfo_children():
@@ -339,10 +490,12 @@ class HomeScreen(tk.Frame):
         self.recent_frame.pack(anchor="w")
 
         for username in self.app.recent_searches:
-            chip = tk.Button(
-                self.recent_frame, text=username, font=("Segoe UI", 9), bg=SKY, fg=TEXT_DARK,
-                relief="flat", padx=12, pady=5, cursor="hand2",
-                command=lambda u=username: self._use_recent(u)
+            chip_width = max(64, 11 * len(username) + 28)
+            chip = RoundedButton(
+                self.recent_frame, text=username, command=lambda u=username: self._use_recent(u),
+                bg_color=DARK_BG, hover_color=DARK_BORDER, fg=ACCENT_GREEN,
+                font=(MONO_FONT, 9), radius=15, width=chip_width, height=30,
+                parent_bg=DARK_PANEL, border_color=DARK_BORDER, border_width=1
             )
             chip.pack(side="left", padx=(0, 6), pady=2)
 
