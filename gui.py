@@ -18,11 +18,15 @@ import threading
 import json
 import os
 import math
+import random
+import io
 
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+from PIL import Image, ImageTk, ImageDraw
 
 from analyzer import GitHubAnalyzer, GitHubAPIError
 
@@ -61,6 +65,13 @@ TEXT_LIGHT = "#C9D1D9"
 TEXT_DIM = "#8B949E"
 DOT_COLOR = "#4A5560"  # brighter than the border color so the moving grid is actually visible
 MONO_FONT = "Consolas"  # monospace, ships with Windows; falls back gracefully elsewhere
+
+# --- Black & grey monochrome theme, used on the Results ("main") screen ---
+BLACK = "#0A0A0A"
+GREY_PANEL = "#1B1B1B"
+GREY_BORDER = "#2E2E2E"
+GREY_TEXT = "#9A9A9A"
+WHITE_TXT = "#F2F2F2"
 
 # Extra-light tints used only for the background doodle cluster
 DOODLE_COLORS = ["#F3ECFB", "#FCE9F1", "#E9F8EF", "#EAF4FD", "#FDF0E6"]
@@ -195,6 +206,7 @@ class GitHubAnalyzerApp(tk.Tk):
         self.token = ""
         self.top_n = 5
         self.data = None
+        self.avatar_bytes = None
         self.recent_searches = self._load_recent_searches()
         self.current_screen = None
 
@@ -257,16 +269,18 @@ class GitHubAnalyzerApp(tk.Tk):
         try:
             analyzer = GitHubAnalyzer(self.username, token=self.token)
             data = analyzer.summary()
-            self.after(0, self._on_fetch_success, data)
+            avatar_bytes = analyzer.fetch_avatar_bytes()
+            self.after(0, self._on_fetch_success, data, avatar_bytes)
         except GitHubAPIError as e:
             self.after(0, self._on_fetch_error, str(e))
         except Exception as e:
             self.after(0, self._on_fetch_error, f"Unexpected error: {e}")
 
-    def _on_fetch_success(self, data):
+    def _on_fetch_success(self, data, avatar_bytes=None):
         self.data = data
+        self.avatar_bytes = avatar_bytes
         self._save_recent_search(self.username)
-        self.show_screen(ResultsScreen)
+        self.frames[LoadingScreen].finish(lambda: self.show_screen(ResultsScreen))
 
     def _on_fetch_error(self, message):
         self.show_screen(HomeScreen)
@@ -518,75 +532,347 @@ class HomeScreen(tk.Frame):
         self.app.start_analysis(username, token, top_n)
 
 
+GITHUB_FACTS = [
+    "GitHub was founded in 2008 by Tom Preston-Werner, Chris Wanstrath, and PJ Hyett.",
+    "Git was created by Linus Torvalds in 2005 to help maintain the Linux kernel.",
+    "The name 'Git' is British slang for an unpleasant person — Linus said he names things after himself.",
+    "Microsoft acquired GitHub in 2018 for about $7.5 billion.",
+    "GitHub's mascot, the Octocat, was designed by Simon Oxley and first appeared in 2008.",
+    "As of the mid-2020s, GitHub hosts well over 100 million developers worldwide.",
+    "The largest GitHub repositories can contain millions of commits spanning many years.",
+    "GitHub Pages lets you host a static website directly from a repository, for free.",
+    "The green squares on a GitHub profile are called the 'contribution graph.'",
+    "GitHub Actions, launched in 2019, lets you automate workflows directly in your repo.",
+    "Git uses SHA-1 hashes to uniquely identify every commit in a repository's history.",
+    "A 'fork' lets you create your own copy of someone else's repository to modify freely.",
+    "GitHub Copilot, an AI pair programmer, was first previewed in 2021.",
+    "The '.git' folder in a repository contains the entire history of the project.",
+    "GitHub's first commit was made by Tom Preston-Werner back in 2007.",
+    "You can navigate many GitHub pages entirely with keyboard shortcuts, like pressing 't' to search files.",
+    "Linus Torvalds reportedly built the first version of Git in about 10 days.",
+    "GitHub Sponsors lets developers get paid directly for their open-source work.",
+    "Some of the most-starred repositories on GitHub are free-code-camp and awesome lists of curated resources.",
+    "A 'pull request' is how changes from one branch or fork are proposed to be merged into another.",
+]
+
+
 # =======================================================================
 # SCREEN 2: Loading
 # =======================================================================
 class LoadingScreen(tk.Frame):
+    SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    MESSAGES = [
+        "> connecting to api.github.com",
+        "> fetching profile data",
+        "> fetching repositories",
+        "> computing language breakdown",
+        "> ranking top repositories",
+    ]
+    SEGMENTS = 24  # number of chunky blocks in the retro progress bar
+    PROGRESS_CAP = 92  # simulated progress creeps up to here, then finish() jumps it to 100
+    FACTS = GITHUB_FACTS
+
     def __init__(self, parent, app):
-        super().__init__(parent, bg=BG)
+        super().__init__(parent, bg=DARK_BG)
         self.app = app
 
-        center = tk.Frame(self, bg=BG)
-        center.place(relx=0.5, rely=0.5, anchor="center")
+        self.dot_offset = 0
+        self._dots_animating = False
+        self.spinner_index = 0
+        self._spinner_animating = False
+        self.message_index = 0
+        self._messages_animating = False
+        self.fact_index = 0
+        self._facts_animating = False
+        self.percent = 0.0
+        self._progress_animating = False
+        self._finishing = False
 
-        tk.Label(center, text="🐙", font=("Segoe UI", 48), bg=BG).pack(pady=(0, 8))
+        self.canvas = tk.Canvas(self, bg=DARK_BG, highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+        self.canvas.bind("<Configure>", self._draw_static)
 
-        self.status_var = tk.StringVar(value="Fetching data...")
-        tk.Label(center, textvariable=self.status_var, font=FONT_SUBTITLE, bg=BG, fg=TEXT_DARK).pack(pady=(0, 16))
-
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Pastel.Horizontal.TProgressbar", troughcolor=CARD, background=BTN_PRIMARY, thickness=10)
-
-        self.progress = ttk.Progressbar(
-            center, style="Pastel.Horizontal.TProgressbar", mode="indeterminate", length=280
-        )
-        self.progress.pack()
-
+    # ------------------------------------------------------------------
     def on_show(self):
-        self.status_var.set(f"Fetching data for '{self.app.username}'...")
-        self.progress.start(12)
+        self.spinner_index = 0
+        self.message_index = 0
+        self.fact_index = random.randrange(len(self.FACTS))
+        self.percent = 0.0
+        self._finishing = False
+        self.after(30, self._draw_static)
 
-    def on_hide(self):
-        self.progress.stop()
+        if not self._dots_animating:
+            self._dots_animating = True
+            self.after(40, self._animate_dots)
+        if not self._spinner_animating:
+            self._spinner_animating = True
+            self.after(90, self._animate_spinner)
+        if not self._messages_animating:
+            self._messages_animating = True
+            self.after(900, self._animate_messages)
+        if not self._facts_animating:
+            self._facts_animating = True
+            self.after(4000, self._animate_facts)
+        if not self._progress_animating:
+            self._progress_animating = True
+            self.after(80, self._animate_progress)
+
+    def finish(self, callback):
+        """Called by the app once real data has arrived: quickly finishes
+        the bar to 100% instead of leaving it stuck mid-way, then continues."""
+        self._finishing = True
+        self._finish_callback = callback
+        self._step_finish()
+
+    def _step_finish(self):
+        if self.percent < 100:
+            self.percent = min(100, self.percent + 6)
+            self._draw_bar_fill()
+            self._draw_percent_text()
+            self.after(12, self._step_finish)
+        else:
+            self.after(250, self._finish_callback)
+
+    # ------------------------------------------------------------------
+    # Static layout: background, cat mark, title, bar frame. Redrawn on resize.
+    # ------------------------------------------------------------------
+    def _draw_static(self, event=None):
+        c = self.canvas
+        c.delete("static")
+        w = c.winfo_width()
+        h = c.winfo_height()
+        if w < 10 or h < 10:
+            return
+        self.w, self.h = w, h
+
+        c.create_rectangle(0, 0, w, h, fill=DARK_BG, outline="", tags=("static", "bg_rect"))
+
+        cx, cy = w * 0.5, h * 0.30
+        badge_r = 40
+        c.create_oval(cx - badge_r, cy - badge_r, cx + badge_r, cy + badge_r,
+                       fill=ACCENT_GREEN, outline="", tags="static")
+        c.create_polygon(cx - 24, cy - 16, cx - 7, cy - 36, cx - 3, cy - 12,
+                          fill=DARK_BG, outline="", tags="static")
+        c.create_polygon(cx + 24, cy - 16, cx + 7, cy - 36, cx + 3, cy - 12,
+                          fill=DARK_BG, outline="", tags="static")
+        c.create_oval(cx - 20, cy - 18, cx + 20, cy + 14, fill=DARK_BG, outline="", tags="static")
+        c.create_oval(cx - 9, cy - 5, cx - 4, cy, fill=ACCENT_GREEN, outline="", tags="static")
+        c.create_oval(cx + 4, cy - 5, cx + 9, cy, fill=ACCENT_GREEN, outline="", tags="static")
+        for i, dx in enumerate([-16, -7, 0, 7, 16]):
+            sx, sy = cx + dx, cy + 12
+            wob = 5 if i % 2 == 0 else -5
+            c.create_line(sx, sy, sx + wob, sy + 12, sx, sy + 22,
+                           fill=DARK_BG, width=4, smooth=True, capstyle="round", tags="static")
+
+        c.create_text(w * 0.5, h * 0.44, text=f"Analyzing '{self.app.username}'",
+                       font=(MONO_FONT, 18, "bold"), fill=TEXT_LIGHT, tags="static")
+
+        # Retro chunky progress bar frame (sharp corners, Windows-95-style)
+        bar_w, bar_h = 380, 24
+        bx1 = w * 0.5 - bar_w / 2
+        by1 = h * 0.56
+        bx2, by2 = bx1 + bar_w, by1 + bar_h
+        self.bar_bounds = (bx1, by1, bx2, by2)
+        c.create_rectangle(bx1 - 3, by1 - 3, bx2 + 3, by2 + 3, outline=DARK_BORDER, width=2, tags="static")
+        c.create_rectangle(bx1, by1, bx2, by2, fill=DARK_PANEL, outline="", tags="static")
+
+        self._draw_dots()
+        c.tag_raise("dots", "bg_rect")
+        self._draw_spinner_line()
+        self._draw_bar_fill()
+        self._draw_percent_text()
+        self._draw_fact_text()
+
+    # ------------------------------------------------------------------
+    # Animated pieces, each redraws only its own tag
+    # ------------------------------------------------------------------
+    def _draw_spinner_line(self):
+        c = self.canvas
+        c.delete("spinner")
+        if not hasattr(self, "w"):
+            return
+        frame = self.SPINNER_FRAMES[self.spinner_index]
+        message = self.MESSAGES[self.message_index]
+        c.create_text(self.w * 0.5, self.h * 0.50, text=f"{frame}  {message}",
+                       font=(MONO_FONT, 11), fill=ACCENT_GREEN, tags="spinner")
+
+    def _draw_bar_fill(self):
+        """Draws the bar as a row of discrete square blocks, like the
+        classic Windows 95/98 installer progress bar, instead of a
+        smooth continuous fill."""
+        c = self.canvas
+        c.delete("bar_fill")
+        if not hasattr(self, "bar_bounds"):
+            return
+        bx1, by1, bx2, by2 = self.bar_bounds
+        gap = 3
+        total_w = bx2 - bx1
+        seg_w = (total_w - gap * (self.SEGMENTS - 1)) / self.SEGMENTS
+        filled = int(round(self.percent / 100 * self.SEGMENTS))
+
+        x = bx1
+        for i in range(self.SEGMENTS):
+            if i < filled:
+                c.create_rectangle(x, by1 + 3, x + seg_w, by2 - 3,
+                                    fill=ACCENT_GREEN, outline="", tags="bar_fill")
+            x += seg_w + gap
+
+    def _draw_percent_text(self):
+        c = self.canvas
+        c.delete("percent_text")
+        if not hasattr(self, "w"):
+            return
+        c.create_text(self.w * 0.5, self.h * 0.56 + 24 + 26, text=f"{int(self.percent)}%",
+                       font=(MONO_FONT, 14, "bold"), fill=ACCENT_GREEN, tags="percent_text")
+
+    def _draw_fact_text(self):
+        c = self.canvas
+        c.delete("fact_text")
+        if not hasattr(self, "w"):
+            return
+        fact = self.FACTS[self.fact_index]
+        c.create_text(self.w * 0.5, self.h * 0.74, text="💡 Did you know?",
+                       font=(MONO_FONT, 10, "bold"), fill=TEXT_DIM, tags="fact_text")
+        c.create_text(self.w * 0.5, self.h * 0.79, text=fact,
+                       font=(MONO_FONT, 11), fill=TEXT_LIGHT, width=int(self.w * 0.55),
+                       justify="center", tags="fact_text")
+
+    def _draw_dots(self):
+        c = self.canvas
+        c.delete("dots")
+        if not hasattr(self, "w"):
+            return
+        step = 34
+        offset = self.dot_offset % step
+        for gx in range(-step, int(self.w) + step, step):
+            for gy in range(-step, int(self.h) + step, step):
+                x, y = gx + offset, gy + offset
+                c.create_oval(x - 1.5, y - 1.5, x + 1.5, y + 1.5, fill=DOT_COLOR, outline="", tags="dots")
+
+    # ------------------------------------------------------------------
+    # Timers - each self-terminates once we've left this screen
+    # ------------------------------------------------------------------
+    def _animate_dots(self):
+        if self.app.current_screen is not LoadingScreen:
+            self._dots_animating = False
+            return
+        self.dot_offset = (self.dot_offset + 1.2) % 34
+        self._draw_dots()
+        self.canvas.tag_raise("dots", "bg_rect")
+        self.after(40, self._animate_dots)
+
+    def _animate_spinner(self):
+        if self.app.current_screen is not LoadingScreen:
+            self._spinner_animating = False
+            return
+        self.spinner_index = (self.spinner_index + 1) % len(self.SPINNER_FRAMES)
+        self._draw_spinner_line()
+        self.after(90, self._animate_spinner)
+
+    def _animate_messages(self):
+        if self.app.current_screen is not LoadingScreen:
+            self._messages_animating = False
+            return
+        self.message_index = (self.message_index + 1) % len(self.MESSAGES)
+        self._draw_spinner_line()
+        self.after(900, self._animate_messages)
+
+    def _animate_facts(self):
+        if self.app.current_screen is not LoadingScreen:
+            self._facts_animating = False
+            return
+        self.fact_index = (self.fact_index + 1) % len(self.FACTS)
+        self._draw_fact_text()
+        self.after(4000, self._animate_facts)
+
+    def _animate_progress(self):
+        if self.app.current_screen is not LoadingScreen:
+            self._progress_animating = False
+            return
+        if not self._finishing and self.percent < self.PROGRESS_CAP:
+            remaining = self.PROGRESS_CAP - self.percent
+            # Slow, gentle crawl — small enough that ~15-20s pass before hitting
+            # the cap, giving the rotating facts time to actually be read.
+            self.percent += remaining * 0.006 + 0.05
+            self.percent = min(self.percent, self.PROGRESS_CAP)
+            self._draw_bar_fill()
+            self._draw_percent_text()
+        self.after(80, self._animate_progress)
 
 
 # =======================================================================
 # SCREEN 3: Results
 # =======================================================================
 class ResultsScreen(tk.Frame):
-    def __init__(self, parent, app):
-        super().__init__(parent, bg=BG)
-        self.app = app
+    """Single consolidated content area (defaults to a one-page Overview)
+    plus a three-dot (⋮) menu in the header for jumping to Top Repos or
+    Charts, replacing the old tabbed / paginated layout."""
 
-        header = tk.Frame(self, bg=LAVENDER, height=70)
+    NAV_ITEMS = [
+        ("overview", "Overview"),
+        ("repos", "Top Repos"),
+        ("charts", "Charts"),
+    ]
+
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=BLACK)
+        self.app = app
+        self.avatar_photo = None  # keep a reference so Tkinter doesn't garbage-collect it
+        self.current_view = "overview"
+
+        # --- Header bar ---
+        header = tk.Frame(self, bg=GREY_PANEL, height=70)
         header.pack(fill="x", side="top")
         header.pack_propagate(False)
 
-        self.header_label = tk.Label(header, text="", font=("Segoe UI", 16, "bold"), bg=LAVENDER, fg=TEXT_DARK)
+        self.header_label = tk.Label(header, text="", font=(MONO_FONT, 15, "bold"),
+                                      bg=GREY_PANEL, fg=WHITE_TXT)
         self.header_label.pack(side="left", padx=24, pady=10)
 
-        back_btn = tk.Button(
-            header, text="← New Search", font=FONT_BODY_BOLD, bg=CARD, fg=TEXT_DARK,
-            relief="flat", padx=16, pady=6, cursor="hand2", command=self.on_back
+        back_btn = RoundedButton(
+            header, text="← New Search", command=self.on_back,
+            bg_color=BLACK, hover_color=GREY_BORDER, fg=WHITE_TXT,
+            font=(MONO_FONT, 10, "bold"), radius=12, width=150, height=38,
+            parent_bg=GREY_PANEL, border_color=GREY_BORDER, border_width=1
         )
         back_btn.pack(side="right", padx=24, pady=10)
 
+        # --- Three-dot navigation menu (Overview / Top Repos / Charts) ---
+        self.menu_btn = tk.Label(
+            header, text="\u22EE", font=(MONO_FONT, 18, "bold"),
+            bg=GREY_PANEL, fg=WHITE_TXT, cursor="hand2", padx=14
+        )
+        self.menu_btn.pack(side="right", padx=(0, 8), pady=10)
+        self.menu_btn.bind("<Button-1>", self._show_nav_menu)
+        self.menu_btn.bind("<Enter>", lambda e: self.menu_btn.config(fg=ACCENT_GREEN))
+        self.menu_btn.bind("<Leave>", lambda e: self.menu_btn.config(fg=WHITE_TXT))
+
+        self.nav_menu = tk.Menu(
+            self, tearoff=0, bg=GREY_PANEL, fg=WHITE_TXT,
+            activebackground=ACCENT_GREEN, activeforeground=BLACK,
+            font=(MONO_FONT, 10, "bold"), bd=0
+        )
+        for view_id, label in self.NAV_ITEMS:
+            self.nav_menu.add_command(label=label, command=lambda v=view_id: self._switch_view(v))
+
+        # --- ttk styling shared by the Treeview used in the Top Repos view ---
         style = ttk.Style()
-        style.configure("TNotebook", background=BG, borderwidth=0)
-        style.configure("TNotebook.Tab", font=FONT_BODY_BOLD, padding=[16, 8], background=PEACH, foreground=TEXT_DARK)
-        style.map("TNotebook.Tab", background=[("selected", CARD)])
+        style.theme_use("clam")
+        style.configure("Mono.Treeview", background=GREY_PANEL, fieldbackground=GREY_PANEL,
+                         foreground=WHITE_TXT, font=(MONO_FONT, 10), borderwidth=0, rowheight=28)
+        style.configure("Mono.Treeview.Heading", background=GREY_BORDER, foreground=WHITE_TXT,
+                         font=(MONO_FONT, 10, "bold"), borderwidth=0)
+        style.map("Mono.Treeview", background=[("selected", WHITE_TXT)], foreground=[("selected", BLACK)])
 
-        self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill="both", expand=True, padx=24, pady=24)
+        # --- Single content area; whichever view is active renders here ---
+        self.content_frame = tk.Frame(self, bg=BLACK)
+        self.content_frame.pack(fill="both", expand=True, padx=24, pady=24)
 
-        self.overview_frame = tk.Frame(self.notebook, bg=CARD)
-        self.repos_frame = tk.Frame(self.notebook, bg=CARD)
-        self.charts_frame = tk.Frame(self.notebook, bg=CARD)
-
-        self.notebook.add(self.overview_frame, text="Overview")
-        self.notebook.add(self.repos_frame, text="Top Repos")
-        self.notebook.add(self.charts_frame, text="Charts")
+    def _show_nav_menu(self, event):
+        try:
+            self.nav_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.nav_menu.grab_release()
 
     def on_back(self):
         self.app.show_screen(HomeScreen)
@@ -595,60 +881,182 @@ class ResultsScreen(tk.Frame):
         data = self.app.data
         if not data:
             return
-        self.app.frames[LoadingScreen].on_hide()
         self.header_label.config(text=f"{data['name'] or data['username']}  (@{data['username']})")
-        self._render_overview(data)
-        self._render_repos(data)
-        self._render_charts(data)
+        self._load_avatar()
+        self._switch_view("overview")
+
+    def _switch_view(self, view):
+        data = self.app.data
+        if not data:
+            return
+        self.current_view = view
+        if view == "overview":
+            self._render_overview(data)
+        elif view == "repos":
+            self._render_repos(data)
+        elif view == "charts":
+            self._render_charts(data)
+
+    # ------------------------------------------------------------------
+    # Avatar: download already happened in the background thread; here
+    # we just decode it and crop it into a circle for the Instagram look.
+    # ------------------------------------------------------------------
+    def _load_avatar(self, size=110):
+        avatar_bytes = self.app.avatar_bytes
+        if not avatar_bytes:
+            self.avatar_photo = None
+            return
+        try:
+            img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+            img = img.resize((size, size), Image.LANCZOS)
+            mask = Image.new("L", (size, size), 0)
+            draw = ImageDraw.Draw(mask)
+            draw.ellipse((0, 0, size, size), fill=255)
+            img.putalpha(mask)
+            self.avatar_photo = ImageTk.PhotoImage(img)
+        except Exception:
+            self.avatar_photo = None
 
     # ------------------------------------------------------------------
     def _clear(self, frame):
         for widget in frame.winfo_children():
             widget.destroy()
 
+    # ------------------------------------------------------------------
+    # Scroll helper: wraps arbitrarily tall content in a canvas + scrollbar
+    # so the consolidated Overview page can grow without clipping.
+    # ------------------------------------------------------------------
+    def _make_scrollable(self, parent):
+        canvas = tk.Canvas(parent, bg=BLACK, highlightthickness=0)
+        scrollbar = tk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=BLACK)
+
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(window_id, width=e.width))
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        return inner
+
+    # ------------------------------------------------------------------
+    # Overview: a single consolidated page with all profile info —
+    # avatar/name/bio/location header, IG-style repo/follower counts,
+    # extended stat cards, and the top-starred-repo highlight — all in
+    # one scrollable view instead of separate paginated screens.
+    # ------------------------------------------------------------------
     def _render_overview(self, data):
-        self._clear(self.overview_frame)
-        wrap = tk.Frame(self.overview_frame, bg=CARD)
-        wrap.pack(fill="both", expand=True, padx=30, pady=24)
+        self._clear(self.content_frame)
+        outer = self._make_scrollable(self.content_frame)
 
-        if data["bio"]:
-            tk.Label(wrap, text=data["bio"], font=FONT_BODY, bg=CARD, fg=TEXT_DARK,
-                     wraplength=700, justify="left").pack(anchor="w", pady=(0, 8))
+        # --- Profile header: avatar + name/username/bio/location ---
+        header_row = tk.Frame(outer, bg=BLACK)
+        header_row.pack(fill="x", padx=50, pady=(36, 24))
 
-        stats_frame = tk.Frame(wrap, bg=CARD)
-        stats_frame.pack(fill="x", pady=12)
+        if self.avatar_photo:
+            tk.Label(header_row, image=self.avatar_photo, bg=BLACK).pack(side="left", padx=(0, 36))
+        else:
+            placeholder = tk.Canvas(header_row, width=110, height=110, bg=BLACK, highlightthickness=0)
+            placeholder.create_oval(2, 2, 108, 108, fill=GREY_PANEL, outline=GREY_BORDER, width=2)
+            placeholder.create_text(55, 55, text="👤", font=(MONO_FONT, 32))
+            placeholder.pack(side="left", padx=(0, 36))
 
-        stat_cards = [
-            ("Followers", data["followers"], SKY),
-            ("Following", data["following"], PEACH),
-            ("Public repos", data["public_repos"], MINT),
-            ("Total stars", data["total_stars"], PINK),
-            ("Total forks", data["total_forks"], LAVENDER),
-            ("Account age (yrs)", data["account_age_years"], SKY),
-        ]
-        for i, (label, value, color) in enumerate(stat_cards):
-            card = tk.Frame(stats_frame, bg=color, padx=18, pady=14)
-            card.grid(row=i // 3, column=i % 3, padx=8, pady=8, sticky="nsew")
-            tk.Label(card, text=str(value), font=("Segoe UI", 16, "bold"), bg=color, fg=TEXT_DARK).pack()
-            tk.Label(card, text=label, font=FONT_BODY, bg=color, fg=TEXT_DARK).pack()
+        info_col = tk.Frame(header_row, bg=BLACK)
+        info_col.pack(side="left", fill="x", expand=True)
 
-        for c in range(3):
-            stats_frame.grid_columnconfigure(c, weight=1)
-
-        if data["location"]:
-            tk.Label(wrap, text=f"📍 {data['location']}", font=FONT_BODY, bg=CARD, fg=TEXT_MUTED).pack(anchor="w")
-
-    def _render_repos(self, data):
-        self._clear(self.repos_frame)
-        wrap = tk.Frame(self.repos_frame, bg=CARD)
-        wrap.pack(fill="both", expand=True, padx=30, pady=24)
-
-        tk.Label(wrap, text="Top repositories by stars", font=FONT_HEADING, bg=CARD, fg=TEXT_DARK).pack(
-            anchor="w", pady=(0, 12)
+        tk.Label(info_col, text=data["name"] or data["username"], font=(MONO_FONT, 18, "bold"),
+                 bg=BLACK, fg=WHITE_TXT).pack(anchor="w")
+        tk.Label(info_col, text=f"@{data['username']}", font=(MONO_FONT, 11), bg=BLACK, fg=GREY_TEXT).pack(
+            anchor="w", pady=(2, 0)
         )
+        if data["bio"]:
+            tk.Label(info_col, text=data["bio"], font=(MONO_FONT, 11), bg=BLACK, fg=WHITE_TXT,
+                     wraplength=750, justify="left").pack(anchor="w", pady=(12, 0))
+        if data["location"]:
+            tk.Label(info_col, text=f"📍 {data['location']}", font=(MONO_FONT, 10), bg=BLACK, fg=GREY_TEXT).pack(
+                anchor="w", pady=(8, 0)
+            )
+
+        # --- IG-style repo/follower/following row ---
+        stats_row = tk.Frame(outer, bg=BLACK)
+        stats_row.pack(fill="x", padx=50, pady=(0, 30))
+        ig_stats = [
+            ("Repos", data["public_repos"]),
+            ("Followers", data["followers"]),
+            ("Following", data["following"]),
+        ]
+        for label, value in ig_stats:
+            cell = tk.Frame(stats_row, bg=BLACK)
+            cell.pack(side="left", expand=True)
+            tk.Label(cell, text=str(value), font=(MONO_FONT, 20, "bold"), bg=BLACK, fg=WHITE_TXT).pack()
+            tk.Label(cell, text=label, font=(MONO_FONT, 10), bg=BLACK, fg=GREY_TEXT).pack()
+
+        tk.Frame(outer, bg=GREY_BORDER, height=1).pack(fill="x", padx=50, pady=(0, 30))
+
+        # --- Extended stat cards: stars, forks, account age ---
+        tk.Label(outer, text="Stats", font=(MONO_FONT, 13, "bold"), bg=BLACK, fg=WHITE_TXT).pack(
+            anchor="w", padx=50, pady=(0, 14)
+        )
+        grid = tk.Frame(outer, bg=BLACK)
+        grid.pack(fill="x", padx=50, pady=(0, 30))
+        cards = [
+            ("⭐ Total stars", data["total_stars"]),
+            ("🍴 Total forks", data["total_forks"]),
+            ("📅 Account age", f"{data['account_age_years']} yrs"),
+        ]
+        for i, (label, value) in enumerate(cards):
+            card = tk.Frame(grid, bg=GREY_PANEL, padx=24, pady=22,
+                             highlightbackground=GREY_BORDER, highlightthickness=1)
+            card.grid(row=0, column=i, padx=10, sticky="nsew")
+            tk.Label(card, text=str(value), font=(MONO_FONT, 20, "bold"), bg=GREY_PANEL, fg=WHITE_TXT).pack()
+            tk.Label(card, text=label, font=(MONO_FONT, 10), bg=GREY_PANEL, fg=GREY_TEXT).pack(pady=(6, 0))
+        for c in range(3):
+            grid.grid_columnconfigure(c, weight=1)
+
+        # --- Top repository highlight ---
+        tk.Label(outer, text="Top Repository", font=(MONO_FONT, 13, "bold"), bg=BLACK, fg=WHITE_TXT).pack(
+            anchor="w", padx=50, pady=(0, 14)
+        )
+        top_repos = data.get("top_repos") or []
+        if not top_repos:
+            tk.Label(outer, text="No public repositories found.", font=(MONO_FONT, 11),
+                     bg=BLACK, fg=GREY_TEXT).pack(anchor="w", padx=50, pady=(0, 40))
+        else:
+            repo = top_repos[0]
+            card = tk.Frame(outer, bg=GREY_PANEL, padx=30, pady=26,
+                             highlightbackground=GREY_BORDER, highlightthickness=1)
+            card.pack(fill="x", padx=50, pady=(0, 40))
+            tk.Label(card, text=repo["name"], font=(MONO_FONT, 16, "bold"), bg=GREY_PANEL, fg=WHITE_TXT).pack(
+                anchor="w"
+            )
+            if repo.get("description"):
+                tk.Label(card, text=repo["description"], font=(MONO_FONT, 10), bg=GREY_PANEL, fg=GREY_TEXT,
+                         wraplength=650, justify="left").pack(anchor="w", pady=(8, 0))
+            stat_row = tk.Frame(card, bg=GREY_PANEL)
+            stat_row.pack(anchor="w", pady=(16, 0))
+            tk.Label(stat_row, text=f"⭐ {repo.get('stargazers_count', 0)}", font=(MONO_FONT, 12, "bold"),
+                     bg=GREY_PANEL, fg=WHITE_TXT).pack(side="left", padx=(0, 24))
+            tk.Label(stat_row, text=f"🍴 {repo.get('forks_count', 0)}", font=(MONO_FONT, 12, "bold"),
+                     bg=GREY_PANEL, fg=WHITE_TXT).pack(side="left")
+
+    # ------------------------------------------------------------------
+    def _render_repos(self, data):
+        self._clear(self.content_frame)
+        wrap = tk.Frame(self.content_frame, bg=BLACK)
+        wrap.pack(fill="both", expand=True, padx=30, pady=24)
+
+        tk.Label(wrap, text="Top repositories by stars", font=(MONO_FONT, 13, "bold"),
+                 bg=BLACK, fg=WHITE_TXT).pack(anchor="w", pady=(0, 12))
 
         columns = ("name", "stars", "forks", "description")
-        tree = ttk.Treeview(wrap, columns=columns, show="headings", height=12)
+        tree = ttk.Treeview(wrap, columns=columns, show="headings", height=12, style="Mono.Treeview")
         tree.heading("name", text="Repository")
         tree.heading("stars", text="⭐ Stars")
         tree.heading("forks", text="🍴 Forks")
@@ -669,32 +1077,42 @@ class ResultsScreen(tk.Frame):
         tree.pack(fill="both", expand=True)
 
     def _render_charts(self, data):
-        self._clear(self.charts_frame)
+        self._clear(self.content_frame)
 
-        fig = Figure(figsize=(9, 4.5), dpi=100, facecolor=CARD)
+        fig = Figure(figsize=(9, 4.5), dpi=100, facecolor=BLACK)
         ax1 = fig.add_subplot(1, 2, 1)
         ax2 = fig.add_subplot(1, 2, 2)
+        for ax in (ax1, ax2):
+            ax.set_facecolor(GREY_PANEL)
 
         langs = data["language_breakdown"]
         if langs:
-            ax1.pie(langs.values(), labels=langs.keys(), autopct="%1.0f%%", startangle=90)
-            ax1.set_title("Language Breakdown")
+            ax1.pie(
+                langs.values(), labels=langs.keys(), autopct="%1.0f%%", startangle=90,
+                textprops={"color": WHITE_TXT, "fontfamily": "monospace"}
+            )
+            ax1.set_title("Language Breakdown", color=WHITE_TXT, fontfamily="monospace")
         else:
-            ax1.text(0.5, 0.5, "No language data", ha="center", va="center")
+            ax1.text(0.5, 0.5, "No language data", ha="center", va="center", color=WHITE_TXT)
 
         top_repos = data["top_repos"][:5]
         if top_repos:
             names = [r["name"] for r in top_repos]
             stars = [r.get("stargazers_count", 0) for r in top_repos]
-            ax2.barh(names[::-1], stars[::-1], color="#B9A6E8")
-            ax2.set_title("Top Repos by Stars")
-            ax2.set_xlabel("Stars")
+            ax2.barh(names[::-1], stars[::-1], color=WHITE_TXT)
+            ax2.set_title("Top Repos by Stars", color=WHITE_TXT, fontfamily="monospace")
+            ax2.set_xlabel("Stars", color=WHITE_TXT, fontfamily="monospace")
+            ax2.tick_params(colors=WHITE_TXT)
+            for spine in ax2.spines.values():
+                spine.set_color(GREY_BORDER)
+            for label in ax2.get_yticklabels() + ax2.get_xticklabels():
+                label.set_fontfamily("monospace")
         else:
-            ax2.text(0.5, 0.5, "No repos found", ha="center", va="center")
+            ax2.text(0.5, 0.5, "No repos found", ha="center", va="center", color=WHITE_TXT)
 
         fig.tight_layout()
 
-        canvas = FigureCanvasTkAgg(fig, master=self.charts_frame)
+        canvas = FigureCanvasTkAgg(fig, master=self.content_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=20, pady=20)
 
