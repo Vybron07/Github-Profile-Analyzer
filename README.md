@@ -24,6 +24,15 @@ visual charts.
   - Token field with a show/hide (👁) toggle
   - Recent searches saved between runs, shown as clickable chips
   - Animated loading screen so the app never looks frozen while fetching
+  - **Consolidated single-page Overview** — avatar, name, bio, location,
+    follower/following/repo counts, stat cards, and a top-repo highlight
+    all on one scrollable page instead of separate tabs
+  - **Three-dot (⋮) navigation menu** — jump straight to Top Repos or
+    Charts from a compact menu in the header, without hunting through tabs
+  - Circular avatar rendering (via Pillow) for an Instagram-style profile
+    header
+  - Monochrome black/grey/white theme with green accents on the Results
+    screen
 
 ---
 
@@ -128,12 +137,21 @@ responsive — fetching happens on a separate thread). Displays an animated
 progress bar and the username being fetched.
 
 ### 3. Results
-- **Overview tab** — bio, location, and stat cards for followers,
-  following, public repos, total stars, total forks, and account age.
-- **Top Repos tab** — a sortable table with stars, forks, and description
-  for each top repo.
-- **Charts tab** — the language pie chart and top-repos bar chart,
-  embedded directly in the window.
+The Results screen shows one consolidated view at a time, with a
+**three-dot (⋮) menu** in the top-right of the header for switching
+between them — no tabs to click through:
+
+- **Overview (default view)** — a single scrollable page combining
+  everything about the user:
+  - Circular avatar (cropped with Pillow), name, `@username`, bio, and
+    location at the top
+  - An Instagram-style stat row for public repos / followers / following
+  - Stat cards for total stars, total forks, and account age
+  - A highlighted card for the user's top starred repository
+- **Top Repos** — open via the ⋮ menu; a sortable table with stars,
+  forks, and description for each top repo.
+- **Charts** — open via the ⋮ menu; the language pie chart and
+  top-repos bar chart, embedded directly in the window.
 - A **← New Search** button in the header returns to the Home screen.
 
 If something goes wrong (bad username, rate limit, network error), the
