@@ -126,8 +126,54 @@ class GitHubAnalyzer:
             "account_created": self.profile.get("created_at"),
             "account_age_years": self.account_age_years(),
             "location": self.profile.get("location"),
+            "avatar_url": self.profile.get("avatar_url"),
             "total_stars": self.total_stars(),
             "total_forks": self.total_forks(),
             "language_breakdown": self.language_breakdown(),
             "top_repos": self.top_repos(),
         }
+
+    def fetch_avatar_bytes(self) -> bytes:
+        """Downloads the user's avatar image and returns the raw bytes,
+        or None if it can't be fetched (e.g. no network, missing avatar)."""
+        if self.profile is None:
+            self.fetch_profile()
+        url = self.profile.get("avatar_url")
+        if not url:
+            return None
+        try:
+            response = self.session.get(url, timeout=10)
+            if response.ok:
+                return response.content
+        except requests.exceptions.RequestException:
+            pass
+        return None
+
+    def fetch_repo_languages(self, owner: str, repo_name: str) -> dict:
+        """Returns byte-accurate {language: bytes} for a single repo.
+        Unlike language_breakdown() (which just counts each repo's primary
+        language), this reflects actual code volume per language."""
+        url = f"{self.BASE_URL}/repos/{owner}/{repo_name}/languages"
+        try:
+            return self._get(url).json()
+        except (GitHubAPIError, requests.exceptions.RequestException):
+            return {}
+
+    def fetch_repo_languages(self, owner: str, repo_name: str) -> dict:
+        """Returns byte-accurate language breakdown for a single repo,
+        e.g. {'Python': 48213, 'HTML': 1023}. This is a separate,
+        more precise endpoint than the primary-language-per-repo count
+        used for the overall profile breakdown."""
+        url = f"{self.BASE_URL}/repos/{owner}/{repo_name}/languages"
+        return self._get(url).json()
+
+    def fetch_repo_languages(self, owner: str, repo_name: str) -> dict:
+        """Returns byte-accurate language breakdown for a single repo,
+        e.g. {"Python": 48213, "HTML": 2044}. Unlike language_breakdown()
+        (which just counts primary language per repo across the whole
+        account), this hits GitHub's per-repo languages endpoint."""
+        url = f"{self.BASE_URL}/repos/{owner}/{repo_name}/languages"
+        try:
+            return self._get(url).json()
+        except GitHubAPIError:
+            return {}
