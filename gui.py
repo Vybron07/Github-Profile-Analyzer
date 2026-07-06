@@ -20,6 +20,7 @@ import os
 import math
 import random
 import io
+import webbrowser
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -72,6 +73,8 @@ GREY_PANEL = "#1B1B1B"
 GREY_BORDER = "#2E2E2E"
 GREY_TEXT = "#9A9A9A"
 WHITE_TXT = "#F2F2F2"
+DOT_INACTIVE = "#3A3A3A"
+DOT_ACTIVE = "#F2F2F2"
 
 # Extra-light tints used only for the background doodle cluster
 DOODLE_COLORS = ["#F3ECFB", "#FCE9F1", "#E9F8EF", "#EAF4FD", "#FDF0E6"]
@@ -207,6 +210,7 @@ class GitHubAnalyzerApp(tk.Tk):
         self.top_n = 5
         self.data = None
         self.avatar_bytes = None
+        self.analyzer = None
         self.recent_searches = self._load_recent_searches()
         self.current_screen = None
 
@@ -270,6 +274,7 @@ class GitHubAnalyzerApp(tk.Tk):
             analyzer = GitHubAnalyzer(self.username, token=self.token)
             data = analyzer.summary()
             avatar_bytes = analyzer.fetch_avatar_bytes()
+            self.analyzer = analyzer
             self.after(0, self._on_fetch_success, data, avatar_bytes)
         except GitHubAPIError as e:
             self.after(0, self._on_fetch_error, str(e))
@@ -804,16 +809,6 @@ class LoadingScreen(tk.Frame):
 # SCREEN 3: Results
 # =======================================================================
 class ResultsScreen(tk.Frame):
-    """Single consolidated content area (defaults to a one-page Overview)
-    plus a three-dot (⋮) menu in the header for jumping to Top Repos or
-    Charts, replacing the old tabbed / paginated layout."""
-
-    NAV_ITEMS = [
-        ("overview", "Overview"),
-        ("repos", "Top Repos"),
-        ("charts", "Charts"),
-    ]
-
     def __init__(self, parent, app):
         super().__init__(parent, bg=BLACK)
         self.app = app
@@ -829,33 +824,26 @@ class ResultsScreen(tk.Frame):
                                       bg=GREY_PANEL, fg=WHITE_TXT)
         self.header_label.pack(side="left", padx=24, pady=10)
 
+        right_controls = tk.Frame(header, bg=GREY_PANEL)
+        right_controls.pack(side="right", padx=24, pady=10)
+
         back_btn = RoundedButton(
-            header, text="← New Search", command=self.on_back,
+            right_controls, text="← New Search", command=self.on_back,
             bg_color=BLACK, hover_color=GREY_BORDER, fg=WHITE_TXT,
             font=(MONO_FONT, 10, "bold"), radius=12, width=150, height=38,
             parent_bg=GREY_PANEL, border_color=GREY_BORDER, border_width=1
         )
-        back_btn.pack(side="right", padx=24, pady=10)
+        back_btn.pack(side="right")
 
-        # --- Three-dot navigation menu (Overview / Top Repos / Charts) ---
-        self.menu_btn = tk.Label(
-            header, text="\u22EE", font=(MONO_FONT, 18, "bold"),
-            bg=GREY_PANEL, fg=WHITE_TXT, cursor="hand2", padx=14
+        self.menu_btn = RoundedButton(
+            right_controls, text="⋮", command=self._open_menu,
+            bg_color=BLACK, hover_color=GREY_BORDER, fg=WHITE_TXT,
+            font=(MONO_FONT, 14, "bold"), radius=12, width=46, height=38,
+            parent_bg=GREY_PANEL, border_color=GREY_BORDER, border_width=1
         )
-        self.menu_btn.pack(side="right", padx=(0, 8), pady=10)
-        self.menu_btn.bind("<Button-1>", self._show_nav_menu)
-        self.menu_btn.bind("<Enter>", lambda e: self.menu_btn.config(fg=ACCENT_GREEN))
-        self.menu_btn.bind("<Leave>", lambda e: self.menu_btn.config(fg=WHITE_TXT))
+        self.menu_btn.pack(side="right", padx=(0, 10))
 
-        self.nav_menu = tk.Menu(
-            self, tearoff=0, bg=GREY_PANEL, fg=WHITE_TXT,
-            activebackground=ACCENT_GREEN, activeforeground=BLACK,
-            font=(MONO_FONT, 10, "bold"), bd=0
-        )
-        for view_id, label in self.NAV_ITEMS:
-            self.nav_menu.add_command(label=label, command=lambda v=view_id: self._switch_view(v))
-
-        # --- ttk styling shared by the Treeview used in the Top Repos view ---
+        # --- ttk styling shared by the repos Treeview ---
         style = ttk.Style()
         style.theme_use("clam")
         style.configure("Mono.Treeview", background=GREY_PANEL, fieldbackground=GREY_PANEL,
@@ -864,15 +852,19 @@ class ResultsScreen(tk.Frame):
                          font=(MONO_FONT, 10, "bold"), borderwidth=0)
         style.map("Mono.Treeview", background=[("selected", WHITE_TXT)], foreground=[("selected", BLACK)])
 
-        # --- Single content area; whichever view is active renders here ---
-        self.content_frame = tk.Frame(self, bg=BLACK)
-        self.content_frame.pack(fill="both", expand=True, padx=24, pady=24)
+        # --- Content container: three views stacked, only one raised at a time ---
+        content = tk.Frame(self, bg=BLACK)
+        content.pack(fill="both", expand=True)
+        content.grid_rowconfigure(0, weight=1)
+        content.grid_columnconfigure(0, weight=1)
 
-    def _show_nav_menu(self, event):
-        try:
-            self.nav_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self.nav_menu.grab_release()
+        self.overview_frame = tk.Frame(content, bg=BLACK)
+        self.repos_frame = tk.Frame(content, bg=BLACK)
+        self.charts_frame = tk.Frame(content, bg=BLACK)
+        self.repo_detail_frame = tk.Frame(content, bg=BLACK)
+
+        for frame in (self.overview_frame, self.repos_frame, self.charts_frame, self.repo_detail_frame):
+            frame.grid(row=0, column=0, sticky="nsew")
 
     def on_back(self):
         self.app.show_screen(HomeScreen)
@@ -883,19 +875,32 @@ class ResultsScreen(tk.Frame):
             return
         self.header_label.config(text=f"{data['name'] or data['username']}  (@{data['username']})")
         self._load_avatar()
-        self._switch_view("overview")
+        self._render_overview(data)
+        self._render_repos(data)
+        self._render_charts(data)
+        self._show_view("overview")
 
-    def _switch_view(self, view):
-        data = self.app.data
-        if not data:
-            return
-        self.current_view = view
-        if view == "overview":
-            self._render_overview(data)
-        elif view == "repos":
-            self._render_repos(data)
-        elif view == "charts":
-            self._render_charts(data)
+    # ------------------------------------------------------------------
+    # Three-dot menu: the only way to reach Top Repos / Charts / back to Overview
+    # ------------------------------------------------------------------
+    def _open_menu(self):
+        menu = tk.Menu(self, tearoff=0, bg=GREY_PANEL, fg=WHITE_TXT,
+                        activebackground=GREY_BORDER, activeforeground=WHITE_TXT,
+                        font=(MONO_FONT, 10), borderwidth=0)
+        menu.add_command(label="Overview", command=lambda: self._show_view("overview"))
+        menu.add_command(label="Top Repos", command=lambda: self._show_view("repos"))
+        menu.add_command(label="Charts", command=lambda: self._show_view("charts"))
+        x = self.menu_btn.winfo_rootx()
+        y = self.menu_btn.winfo_rooty() + self.menu_btn.winfo_height() + 4
+        menu.tk_popup(x, y)
+
+    def _show_view(self, name):
+        self.current_view = name
+        frame = {
+            "overview": self.overview_frame, "repos": self.repos_frame,
+            "charts": self.charts_frame, "repo_detail": self.repo_detail_frame,
+        }[name]
+        frame.tkraise()
 
     # ------------------------------------------------------------------
     # Avatar: download already happened in the background thread; here
@@ -923,70 +928,49 @@ class ResultsScreen(tk.Frame):
             widget.destroy()
 
     # ------------------------------------------------------------------
-    # Scroll helper: wraps arbitrarily tall content in a canvas + scrollbar
-    # so the consolidated Overview page can grow without clipping.
-    # ------------------------------------------------------------------
-    def _make_scrollable(self, parent):
-        canvas = tk.Canvas(parent, bg=BLACK, highlightthickness=0)
-        scrollbar = tk.Scrollbar(parent, orient="vertical", command=canvas.yview)
-        inner = tk.Frame(canvas, bg=BLACK)
-
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.bind("<Configure>", lambda e: canvas.itemconfig(window_id, width=e.width))
-
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
-        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
-
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        return inner
-
-    # ------------------------------------------------------------------
-    # Overview: a single consolidated page with all profile info —
-    # avatar/name/bio/location header, IG-style repo/follower counts,
-    # extended stat cards, and the top-starred-repo highlight — all in
-    # one scrollable view instead of separate paginated screens.
+    # Overview: a single page with everything about the person, no
+    # pagination — avatar/IG-style stats up top, then extended stats,
+    # then a featured top-repo card, all stacked in one scroll-free view.
     # ------------------------------------------------------------------
     def _render_overview(self, data):
-        self._clear(self.content_frame)
-        outer = self._make_scrollable(self.content_frame)
+        self._clear(self.overview_frame)
 
-        # --- Profile header: avatar + name/username/bio/location ---
-        header_row = tk.Frame(outer, bg=BLACK)
-        header_row.pack(fill="x", padx=50, pady=(36, 24))
+        canvas = tk.Canvas(self.overview_frame, bg=BLACK, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self.overview_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        frame = tk.Frame(canvas, bg=BLACK)
+        frame_id = canvas.create_window((0, 0), window=frame, anchor="nw")
+
+        def _on_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_resize(event):
+            canvas.itemconfig(frame_id, width=event.width)
+
+        frame.bind("<Configure>", _on_configure)
+        canvas.bind("<Configure>", _on_canvas_resize)
+
+        pad = tk.Frame(frame, bg=BLACK)
+        pad.pack(fill="both", expand=True, padx=50, pady=36)
+
+        # --- Profile header row: avatar + IG-style stat row ---
+        top_row = tk.Frame(pad, bg=BLACK)
+        top_row.pack(fill="x")
 
         if self.avatar_photo:
-            tk.Label(header_row, image=self.avatar_photo, bg=BLACK).pack(side="left", padx=(0, 36))
+            tk.Label(top_row, image=self.avatar_photo, bg=BLACK).pack(side="left", padx=(0, 36))
         else:
-            placeholder = tk.Canvas(header_row, width=110, height=110, bg=BLACK, highlightthickness=0)
+            placeholder = tk.Canvas(top_row, width=110, height=110, bg=BLACK, highlightthickness=0)
             placeholder.create_oval(2, 2, 108, 108, fill=GREY_PANEL, outline=GREY_BORDER, width=2)
             placeholder.create_text(55, 55, text="👤", font=(MONO_FONT, 32))
             placeholder.pack(side="left", padx=(0, 36))
 
-        info_col = tk.Frame(header_row, bg=BLACK)
-        info_col.pack(side="left", fill="x", expand=True)
+        stats_row = tk.Frame(top_row, bg=BLACK)
+        stats_row.pack(side="left", fill="x", expand=True)
 
-        tk.Label(info_col, text=data["name"] or data["username"], font=(MONO_FONT, 18, "bold"),
-                 bg=BLACK, fg=WHITE_TXT).pack(anchor="w")
-        tk.Label(info_col, text=f"@{data['username']}", font=(MONO_FONT, 11), bg=BLACK, fg=GREY_TEXT).pack(
-            anchor="w", pady=(2, 0)
-        )
-        if data["bio"]:
-            tk.Label(info_col, text=data["bio"], font=(MONO_FONT, 11), bg=BLACK, fg=WHITE_TXT,
-                     wraplength=750, justify="left").pack(anchor="w", pady=(12, 0))
-        if data["location"]:
-            tk.Label(info_col, text=f"📍 {data['location']}", font=(MONO_FONT, 10), bg=BLACK, fg=GREY_TEXT).pack(
-                anchor="w", pady=(8, 0)
-            )
-
-        # --- IG-style repo/follower/following row ---
-        stats_row = tk.Frame(outer, bg=BLACK)
-        stats_row.pack(fill="x", padx=50, pady=(0, 30))
         ig_stats = [
             ("Repos", data["public_repos"]),
             ("Followers", data["followers"]),
@@ -998,62 +982,74 @@ class ResultsScreen(tk.Frame):
             tk.Label(cell, text=str(value), font=(MONO_FONT, 20, "bold"), bg=BLACK, fg=WHITE_TXT).pack()
             tk.Label(cell, text=label, font=(MONO_FONT, 10), bg=BLACK, fg=GREY_TEXT).pack()
 
-        tk.Frame(outer, bg=GREY_BORDER, height=1).pack(fill="x", padx=50, pady=(0, 30))
+        tk.Label(pad, text=data["name"] or data["username"], font=(MONO_FONT, 16, "bold"),
+                 bg=BLACK, fg=WHITE_TXT).pack(anchor="w", pady=(26, 0))
+        tk.Label(pad, text=f"@{data['username']}", font=(MONO_FONT, 10), bg=BLACK, fg=GREY_TEXT).pack(anchor="w")
 
-        # --- Extended stat cards: stars, forks, account age ---
-        tk.Label(outer, text="Stats", font=(MONO_FONT, 13, "bold"), bg=BLACK, fg=WHITE_TXT).pack(
-            anchor="w", padx=50, pady=(0, 14)
+        if data["bio"]:
+            tk.Label(pad, text=data["bio"], font=(MONO_FONT, 11), bg=BLACK, fg=WHITE_TXT,
+                     wraplength=750, justify="left").pack(anchor="w", pady=(14, 0))
+        if data["location"]:
+            tk.Label(pad, text=f"📍 {data['location']}", font=(MONO_FONT, 10), bg=BLACK, fg=GREY_TEXT).pack(
+                anchor="w", pady=(10, 0)
+            )
+
+        # --- Extended stats row ---
+        tk.Label(pad, text="Stats", font=(MONO_FONT, 13, "bold"), bg=BLACK, fg=WHITE_TXT).pack(
+            anchor="w", pady=(34, 14)
         )
-        grid = tk.Frame(outer, bg=BLACK)
-        grid.pack(fill="x", padx=50, pady=(0, 30))
+        grid = tk.Frame(pad, bg=BLACK)
+        grid.pack(fill="x")
         cards = [
             ("⭐ Total stars", data["total_stars"]),
             ("🍴 Total forks", data["total_forks"]),
             ("📅 Account age", f"{data['account_age_years']} yrs"),
         ]
         for i, (label, value) in enumerate(cards):
-            card = tk.Frame(grid, bg=GREY_PANEL, padx=24, pady=22,
+            card = tk.Frame(grid, bg=GREY_PANEL, padx=24, pady=20,
                              highlightbackground=GREY_BORDER, highlightthickness=1)
             card.grid(row=0, column=i, padx=10, sticky="nsew")
-            tk.Label(card, text=str(value), font=(MONO_FONT, 20, "bold"), bg=GREY_PANEL, fg=WHITE_TXT).pack()
+            tk.Label(card, text=str(value), font=(MONO_FONT, 18, "bold"), bg=GREY_PANEL, fg=WHITE_TXT).pack()
             tk.Label(card, text=label, font=(MONO_FONT, 10), bg=GREY_PANEL, fg=GREY_TEXT).pack(pady=(6, 0))
         for c in range(3):
             grid.grid_columnconfigure(c, weight=1)
 
-        # --- Top repository highlight ---
-        tk.Label(outer, text="Top Repository", font=(MONO_FONT, 13, "bold"), bg=BLACK, fg=WHITE_TXT).pack(
-            anchor="w", padx=50, pady=(0, 14)
+        # --- Featured top-repo card ---
+        tk.Label(pad, text="Top Repository", font=(MONO_FONT, 13, "bold"), bg=BLACK, fg=WHITE_TXT).pack(
+            anchor="w", pady=(34, 14)
         )
         top_repos = data.get("top_repos") or []
-        if not top_repos:
-            tk.Label(outer, text="No public repositories found.", font=(MONO_FONT, 11),
-                     bg=BLACK, fg=GREY_TEXT).pack(anchor="w", padx=50, pady=(0, 40))
-        else:
+        if top_repos:
             repo = top_repos[0]
-            card = tk.Frame(outer, bg=GREY_PANEL, padx=30, pady=26,
+            card = tk.Frame(pad, bg=GREY_PANEL, padx=28, pady=24,
                              highlightbackground=GREY_BORDER, highlightthickness=1)
-            card.pack(fill="x", padx=50, pady=(0, 40))
-            tk.Label(card, text=repo["name"], font=(MONO_FONT, 16, "bold"), bg=GREY_PANEL, fg=WHITE_TXT).pack(
+            card.pack(fill="x")
+            tk.Label(card, text=repo["name"], font=(MONO_FONT, 15, "bold"), bg=GREY_PANEL, fg=WHITE_TXT).pack(
                 anchor="w"
             )
             if repo.get("description"):
                 tk.Label(card, text=repo["description"], font=(MONO_FONT, 10), bg=GREY_PANEL, fg=GREY_TEXT,
                          wraplength=650, justify="left").pack(anchor="w", pady=(8, 0))
             stat_row = tk.Frame(card, bg=GREY_PANEL)
-            stat_row.pack(anchor="w", pady=(16, 0))
-            tk.Label(stat_row, text=f"⭐ {repo.get('stargazers_count', 0)}", font=(MONO_FONT, 12, "bold"),
-                     bg=GREY_PANEL, fg=WHITE_TXT).pack(side="left", padx=(0, 24))
-            tk.Label(stat_row, text=f"🍴 {repo.get('forks_count', 0)}", font=(MONO_FONT, 12, "bold"),
+            stat_row.pack(anchor="w", pady=(14, 0))
+            tk.Label(stat_row, text=f"⭐ {repo.get('stargazers_count', 0)}", font=(MONO_FONT, 11, "bold"),
+                     bg=GREY_PANEL, fg=WHITE_TXT).pack(side="left", padx=(0, 22))
+            tk.Label(stat_row, text=f"🍴 {repo.get('forks_count', 0)}", font=(MONO_FONT, 11, "bold"),
                      bg=GREY_PANEL, fg=WHITE_TXT).pack(side="left")
+        else:
+            tk.Label(pad, text="No public repositories found.", font=(MONO_FONT, 11),
+                     bg=BLACK, fg=GREY_TEXT).pack(anchor="w")
 
     # ------------------------------------------------------------------
     def _render_repos(self, data):
-        self._clear(self.content_frame)
-        wrap = tk.Frame(self.content_frame, bg=BLACK)
+        self._clear(self.repos_frame)
+        wrap = tk.Frame(self.repos_frame, bg=BLACK)
         wrap.pack(fill="both", expand=True, padx=30, pady=24)
 
         tk.Label(wrap, text="Top repositories by stars", font=(MONO_FONT, 13, "bold"),
-                 bg=BLACK, fg=WHITE_TXT).pack(anchor="w", pady=(0, 12))
+                 bg=BLACK, fg=WHITE_TXT).pack(anchor="w", pady=(0, 4))
+        tk.Label(wrap, text="Click a repository to see full details", font=(MONO_FONT, 9),
+                 bg=BLACK, fg=GREY_TEXT).pack(anchor="w", pady=(0, 12))
 
         columns = ("name", "stars", "forks", "description")
         tree = ttk.Treeview(wrap, columns=columns, show="headings", height=12, style="Mono.Treeview")
@@ -1066,18 +1062,129 @@ class ResultsScreen(tk.Frame):
         tree.column("forks", width=80, anchor="center")
         tree.column("description", width=380)
 
+        self.repo_by_item = {}
         for repo in data["top_repos"][: self.app.top_n]:
-            tree.insert("", "end", values=(
+            item_id = tree.insert("", "end", values=(
                 repo["name"],
                 repo.get("stargazers_count", 0),
                 repo.get("forks_count", 0),
                 (repo.get("description") or "")[:80],
             ))
+            self.repo_by_item[item_id] = repo
 
+        tree.bind("<<TreeviewSelect>>", self._on_repo_selected)
         tree.pack(fill="both", expand=True)
 
+    def _on_repo_selected(self, event):
+        tree = event.widget
+        selection = tree.selection()
+        if not selection:
+            return
+        repo = self.repo_by_item.get(selection[0])
+        if repo:
+            self._show_repo_detail(repo)
+
+    # ------------------------------------------------------------------
+    # Repo detail view: full stats + per-repo language chart, opened by
+    # clicking a row in Top Repos. Clicking the repo name opens it on GitHub.
+    # ------------------------------------------------------------------
+    def _show_repo_detail(self, repo):
+        self._render_repo_detail(repo)
+        self._show_view("repo_detail")
+
+    def _render_repo_detail(self, repo):
+        self._clear(self.repo_detail_frame)
+        wrap = tk.Frame(self.repo_detail_frame, bg=BLACK)
+        wrap.pack(fill="both", expand=True, padx=40, pady=30)
+
+        RoundedButton(
+            wrap, text="← Back to Top Repos", command=lambda: self._show_view("repos"),
+            bg_color=BLACK, hover_color=GREY_BORDER, fg=WHITE_TXT,
+            font=(MONO_FONT, 10, "bold"), radius=12, width=190, height=38,
+            parent_bg=BLACK, border_color=GREY_BORDER, border_width=1
+        ).pack(anchor="w", pady=(0, 20))
+
+        html_url = repo.get("html_url", "")
+        name_btn = RoundedButton(
+            wrap, text=f"{repo['name']}  ↗", command=lambda: webbrowser.open(html_url) if html_url else None,
+            bg_color=GREY_PANEL, hover_color=GREY_BORDER, fg=WHITE_TXT,
+            font=(MONO_FONT, 18, "bold"), radius=10, width=420, height=54,
+            parent_bg=BLACK, border_color=GREY_BORDER, border_width=1
+        )
+        name_btn.pack(anchor="w", pady=(0, 6))
+        tk.Label(wrap, text="Click the name above to open this repository on GitHub",
+                 font=(MONO_FONT, 9), bg=BLACK, fg=GREY_TEXT).pack(anchor="w", pady=(0, 18))
+
+        if repo.get("description"):
+            tk.Label(wrap, text=repo["description"], font=(MONO_FONT, 11), bg=BLACK, fg=WHITE_TXT,
+                     wraplength=800, justify="left").pack(anchor="w", pady=(0, 22))
+
+        stats = [
+            ("⭐ Stars", repo.get("stargazers_count", 0)),
+            ("🍴 Forks", repo.get("forks_count", 0)),
+            ("👀 Watchers", repo.get("watchers_count", 0)),
+            ("🐛 Open issues", repo.get("open_issues_count", 0)),
+            ("💾 Size (KB)", repo.get("size", 0)),
+            ("🌿 Default branch", repo.get("default_branch", "-")),
+        ]
+        grid = tk.Frame(wrap, bg=BLACK)
+        grid.pack(fill="x", pady=(0, 26))
+        for i, (label, value) in enumerate(stats):
+            card = tk.Frame(grid, bg=GREY_PANEL, padx=18, pady=14,
+                             highlightbackground=GREY_BORDER, highlightthickness=1)
+            card.grid(row=i // 3, column=i % 3, padx=8, pady=8, sticky="nsew")
+            tk.Label(card, text=str(value), font=(MONO_FONT, 14, "bold"), bg=GREY_PANEL, fg=WHITE_TXT).pack()
+            tk.Label(card, text=label, font=(MONO_FONT, 9), bg=GREY_PANEL, fg=GREY_TEXT).pack()
+        for c in range(3):
+            grid.grid_columnconfigure(c, weight=1)
+
+        tk.Label(wrap, text="Language Breakdown", font=(MONO_FONT, 13, "bold"),
+                 bg=BLACK, fg=WHITE_TXT).pack(anchor="w", pady=(0, 12))
+
+        self.repo_lang_container = tk.Frame(wrap, bg=BLACK)
+        self.repo_lang_container.pack(fill="both", expand=True)
+        tk.Label(self.repo_lang_container, text="Loading language data...", font=(MONO_FONT, 10),
+                 bg=BLACK, fg=GREY_TEXT).pack(anchor="w")
+
+        owner = (repo.get("owner") or {}).get("login")
+        if owner:
+            threading.Thread(
+                target=self._fetch_repo_languages_thread, args=(owner, repo["name"]), daemon=True
+            ).start()
+        else:
+            self._render_repo_languages_chart({})
+
+    def _fetch_repo_languages_thread(self, owner, repo_name):
+        try:
+            analyzer = GitHubAnalyzer(owner, token=self.app.token)
+            langs = analyzer.fetch_repo_languages(owner, repo_name)
+        except Exception:
+            langs = {}
+        self.after(0, self._render_repo_languages_chart, langs)
+
+    def _render_repo_languages_chart(self, langs):
+        for widget in self.repo_lang_container.winfo_children():
+            widget.destroy()
+
+        if not langs:
+            tk.Label(self.repo_lang_container, text="No language data available for this repository.",
+                     font=(MONO_FONT, 10), bg=BLACK, fg=GREY_TEXT).pack(anchor="w")
+            return
+
+        fig = Figure(figsize=(5.5, 4), dpi=100, facecolor=BLACK)
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(GREY_PANEL)
+        ax.pie(langs.values(), labels=langs.keys(), autopct="%1.0f%%", startangle=90,
+               textprops={"color": WHITE_TXT, "fontfamily": "monospace"})
+        ax.set_title("Languages used (by bytes)", color=WHITE_TXT, fontfamily="monospace")
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=self.repo_lang_container)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
     def _render_charts(self, data):
-        self._clear(self.content_frame)
+        self._clear(self.charts_frame)
 
         fig = Figure(figsize=(9, 4.5), dpi=100, facecolor=BLACK)
         ax1 = fig.add_subplot(1, 2, 1)
@@ -1112,7 +1219,7 @@ class ResultsScreen(tk.Frame):
 
         fig.tight_layout()
 
-        canvas = FigureCanvasTkAgg(fig, master=self.content_frame)
+        canvas = FigureCanvasTkAgg(fig, master=self.charts_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=20, pady=20)
 
