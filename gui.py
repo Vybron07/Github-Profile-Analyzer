@@ -305,7 +305,6 @@ class HomeScreen(tk.Frame):
     def __init__(self, parent, app):
         super().__init__(parent, bg=DARK_PANEL)
         self.app = app
-        self.token_visible = False
         self.dot_offset = 0
         self._dots_animating = False
 
@@ -325,7 +324,7 @@ class HomeScreen(tk.Frame):
         form_wrap = tk.Frame(right, bg=DARK_PANEL)
         form_wrap.place(relx=0.5, rely=0.5, anchor="center")
 
-        tk.Label(form_wrap, text="$ Analyze --user", font=(MONO_FONT, 20, "bold"),
+        tk.Label(form_wrap, text="GIT ANALYZER", font=(MONO_FONT, 24, "bold"),
                  bg=DARK_PANEL, fg=ACCENT_GREEN).pack(anchor="w")
         tk.Label(form_wrap, text="// Pull public stats for any GitHub profile",
                  font=(MONO_FONT, 10), bg=DARK_PANEL, fg=TEXT_DIM).pack(anchor="w", pady=(2, 28))
@@ -337,33 +336,35 @@ class HomeScreen(tk.Frame):
             border=DARK_BORDER, font=(MONO_FONT, 12)
         )
         self.username_entry.config(fg=TEXT_LIGHT, insertbackground=ACCENT_GREEN)
-        username_canvas.pack(anchor="w", pady=(0, 18))
+        username_canvas.pack(anchor="w", pady=(0, 22))
         self.username_entry.insert(0, "octocat")
         self.username_entry.bind("<Return>", lambda e: self.on_analyze())
 
-        tk.Label(form_wrap, text="ACCESS TOKEN (OPTIONAL)", font=(MONO_FONT, 9, "bold"),
+        tk.Label(form_wrap, text="TOP REPOS TO SHOW", font=(MONO_FONT, 9, "bold"),
                  bg=DARK_PANEL, fg=TEXT_DIM).pack(anchor="w", pady=(0, 4))
-        token_row = tk.Frame(form_wrap, bg=DARK_PANEL)
-        token_row.pack(anchor="w", pady=(0, 18))
-        token_canvas, self.token_entry = make_rounded_entry(
-            token_row, width_px=278, height_px=46, radius=23, show="*", fill=DARK_BG,
-            border=DARK_BORDER, font=(MONO_FONT, 12)
-        )
-        self.token_entry.config(fg=TEXT_LIGHT, insertbackground=ACCENT_GREEN)
-        token_canvas.pack(side="left")
-        self.token_toggle_btn = RoundedButton(
-            token_row, text="Show", command=self._toggle_token_visibility,
-            bg_color=DARK_BG, hover_color=DARK_BORDER, fg=ACCENT_CYAN,
-            font=(MONO_FONT, 9, "bold"), radius=23, width=54, height=46,
-            parent_bg=DARK_PANEL, border_color=DARK_BORDER, border_width=1
-        )
-        self.token_toggle_btn.pack(side="left", padx=(8, 0))
-
+        self.top_n = 5
         topn_row = tk.Frame(form_wrap, bg=DARK_PANEL)
         topn_row.pack(anchor="w", pady=(0, 26))
-        tk.Label(topn_row, text="Top repos:", font=(MONO_FONT, 10), bg=DARK_PANEL, fg=TEXT_LIGHT).pack(side="left")
-        self.top_n_var = tk.StringVar(value="5")
-        ttk.Spinbox(topn_row, from_=1, to=20, width=5, textvariable=self.top_n_var).pack(side="left", padx=(8, 0))
+
+        self.topn_minus_btn = RoundedButton(
+            topn_row, text="–", command=lambda: self._adjust_top_n(-1),
+            bg_color=DARK_BG, hover_color=DARK_BORDER, fg=ACCENT_CYAN,
+            font=(MONO_FONT, 14, "bold"), radius=23, width=46, height=46,
+            parent_bg=DARK_PANEL, border_color=DARK_BORDER, border_width=1
+        )
+        self.topn_minus_btn.pack(side="left")
+
+        self.topn_display = tk.Canvas(topn_row, width=64, height=46, bg=DARK_PANEL, highlightthickness=0)
+        self.topn_display.pack(side="left", padx=10)
+        self._draw_topn_display()
+
+        self.topn_plus_btn = RoundedButton(
+            topn_row, text="+", command=lambda: self._adjust_top_n(1),
+            bg_color=DARK_BG, hover_color=DARK_BORDER, fg=ACCENT_CYAN,
+            font=(MONO_FONT, 14, "bold"), radius=23, width=46, height=46,
+            parent_bg=DARK_PANEL, border_color=DARK_BORDER, border_width=1
+        )
+        self.topn_plus_btn.pack(side="left")
 
         self.analyze_btn = RoundedButton(
             form_wrap, text="▶  Run Analysis", command=self.on_analyze,
@@ -372,7 +373,7 @@ class HomeScreen(tk.Frame):
         )
         self.analyze_btn.pack(anchor="w")
 
-        tk.Label(form_wrap, text="# Tip: add a token to raise rate limit 60 -> 5,000 req/hr",
+        tk.Label(form_wrap, text="# Tip: works with any public GitHub profile, no login needed",
                  font=(MONO_FONT, 8), bg=DARK_PANEL, fg=TEXT_DIM, wraplength=340, justify="left").pack(
             anchor="w", pady=(10, 0)
         )
@@ -384,10 +385,16 @@ class HomeScreen(tk.Frame):
         self.form_wrap = form_wrap
 
     # ------------------------------------------------------------------
-    def _toggle_token_visibility(self):
-        self.token_visible = not self.token_visible
-        self.token_entry.config(show="" if self.token_visible else "*")
-        self.token_toggle_btn.set_text("Hide" if self.token_visible else "Show")
+    def _draw_topn_display(self):
+        c = self.topn_display
+        c.delete("all")
+        points = round_rect_points(1, 1, 63, 45, 23)
+        c.create_polygon(points, smooth=True, fill=DARK_BG, outline=DARK_BORDER, width=1)
+        c.create_text(32, 23, text=str(self.top_n), font=(MONO_FONT, 15, "bold"), fill=TEXT_LIGHT)
+
+    def _adjust_top_n(self, delta):
+        self.top_n = max(1, min(20, self.top_n + delta))
+        self._draw_topn_display()
 
     # ------------------------------------------------------------------
     # Left panel: dark terminal background + original cat/octopus mark
@@ -528,13 +535,7 @@ class HomeScreen(tk.Frame):
         if not username:
             messagebox.showwarning("Missing username", "Please enter a GitHub username.")
             return
-        try:
-            top_n = int(self.top_n_var.get())
-        except ValueError:
-            top_n = 5
-
-        token = self.token_entry.get().strip()
-        self.app.start_analysis(username, token, top_n)
+        self.app.start_analysis(username, None, self.top_n)
 
 
 GITHUB_FACTS = [
@@ -886,10 +887,11 @@ class ResultsScreen(tk.Frame):
     def _open_menu(self):
         menu = tk.Menu(self, tearoff=0, bg=GREY_PANEL, fg=WHITE_TXT,
                         activebackground=GREY_BORDER, activeforeground=WHITE_TXT,
-                        font=(MONO_FONT, 10), borderwidth=0)
-        menu.add_command(label="Overview", command=lambda: self._show_view("overview"))
-        menu.add_command(label="Top Repos", command=lambda: self._show_view("repos"))
-        menu.add_command(label="Charts", command=lambda: self._show_view("charts"))
+                        font=(MONO_FONT, 12, "bold"), borderwidth=0,
+                        relief="flat")
+        menu.add_command(label="  Overview", command=lambda: self._show_view("overview"))
+        menu.add_command(label="  Top Repos", command=lambda: self._show_view("repos"))
+        menu.add_command(label="  Charts", command=lambda: self._show_view("charts"))
         x = self.menu_btn.winfo_rootx()
         y = self.menu_btn.winfo_rooty() + self.menu_btn.winfo_height() + 4
         menu.tk_popup(x, y)
@@ -960,13 +962,29 @@ class ResultsScreen(tk.Frame):
         top_row = tk.Frame(pad, bg=BLACK)
         top_row.pack(fill="x")
 
+        profile_url = f"https://github.com/{data['username']}"
+
+        def _open_profile(event=None):
+            webbrowser.open(profile_url)
+
+        def _bind_link(widget, hover_widget=None, hover_fg=None, base_fg=None):
+            widget.config(cursor="hand2")
+            widget.bind("<Button-1>", _open_profile)
+            if hover_widget is not None:
+                widget.bind("<Enter>", lambda e: hover_widget.config(fg=hover_fg))
+                widget.bind("<Leave>", lambda e: hover_widget.config(fg=base_fg))
+
         if self.avatar_photo:
-            tk.Label(top_row, image=self.avatar_photo, bg=BLACK).pack(side="left", padx=(0, 36))
+            avatar_label = tk.Label(top_row, image=self.avatar_photo, bg=BLACK)
+            avatar_label.pack(side="left", padx=(0, 36))
+            _bind_link(avatar_label)
         else:
             placeholder = tk.Canvas(top_row, width=110, height=110, bg=BLACK, highlightthickness=0)
             placeholder.create_oval(2, 2, 108, 108, fill=GREY_PANEL, outline=GREY_BORDER, width=2)
             placeholder.create_text(55, 55, text="👤", font=(MONO_FONT, 32))
             placeholder.pack(side="left", padx=(0, 36))
+            placeholder.config(cursor="hand2")
+            placeholder.bind("<Button-1>", _open_profile)
 
         stats_row = tk.Frame(top_row, bg=BLACK)
         stats_row.pack(side="left", fill="x", expand=True)
@@ -982,9 +1000,16 @@ class ResultsScreen(tk.Frame):
             tk.Label(cell, text=str(value), font=(MONO_FONT, 20, "bold"), bg=BLACK, fg=WHITE_TXT).pack()
             tk.Label(cell, text=label, font=(MONO_FONT, 10), bg=BLACK, fg=GREY_TEXT).pack()
 
-        tk.Label(pad, text=data["name"] or data["username"], font=(MONO_FONT, 16, "bold"),
-                 bg=BLACK, fg=WHITE_TXT).pack(anchor="w", pady=(26, 0))
-        tk.Label(pad, text=f"@{data['username']}", font=(MONO_FONT, 10), bg=BLACK, fg=GREY_TEXT).pack(anchor="w")
+        name_label = tk.Label(pad, text=data["name"] or data["username"], font=(MONO_FONT, 16, "bold"),
+                               bg=BLACK, fg=WHITE_TXT)
+        name_label.pack(anchor="w", pady=(26, 0))
+        _bind_link(name_label, hover_widget=name_label, hover_fg=ACCENT_CYAN, base_fg=WHITE_TXT)
+
+        username_label = tk.Label(pad, text=f"@{data['username']}  ↗", font=(MONO_FONT, 10), bg=BLACK, fg=ACCENT_CYAN)
+        username_label.pack(anchor="w")
+        _bind_link(username_label)
+        tk.Label(pad, text="Click the avatar, name, or username above to view this profile on GitHub",
+                 font=(MONO_FONT, 9), bg=BLACK, fg=GREY_TEXT).pack(anchor="w", pady=(4, 0))
 
         if data["bio"]:
             tk.Label(pad, text=data["bio"], font=(MONO_FONT, 11), bg=BLACK, fg=WHITE_TXT,
@@ -1043,46 +1068,102 @@ class ResultsScreen(tk.Frame):
     # ------------------------------------------------------------------
     def _render_repos(self, data):
         self._clear(self.repos_frame)
-        wrap = tk.Frame(self.repos_frame, bg=BLACK)
-        wrap.pack(fill="both", expand=True, padx=30, pady=24)
 
-        tk.Label(wrap, text="Top repositories by stars", font=(MONO_FONT, 13, "bold"),
-                 bg=BLACK, fg=WHITE_TXT).pack(anchor="w", pady=(0, 4))
-        tk.Label(wrap, text="Click a repository to see full details", font=(MONO_FONT, 9),
-                 bg=BLACK, fg=GREY_TEXT).pack(anchor="w", pady=(0, 12))
+        # Scrollable canvas so any number of repo cards can stack vertically
+        outer = tk.Frame(self.repos_frame, bg=BLACK)
+        outer.pack(fill="both", expand=True, padx=30, pady=24)
 
-        columns = ("name", "stars", "forks", "description")
-        tree = ttk.Treeview(wrap, columns=columns, show="headings", height=12, style="Mono.Treeview")
-        tree.heading("name", text="Repository")
-        tree.heading("stars", text="⭐ Stars")
-        tree.heading("forks", text="🍴 Forks")
-        tree.heading("description", text="Description")
-        tree.column("name", width=160)
-        tree.column("stars", width=80, anchor="center")
-        tree.column("forks", width=80, anchor="center")
-        tree.column("description", width=380)
+        tk.Label(outer, text="TOP REPOSITORIES", font=(MONO_FONT, 20, "bold"),
+                 bg=BLACK, fg=WHITE_TXT).pack(anchor="w", pady=(0, 2))
+        tk.Label(outer, text="Ranked by stars  ·  click a card for full details", font=(MONO_FONT, 10),
+                 bg=BLACK, fg=GREY_TEXT).pack(anchor="w", pady=(0, 18))
 
-        self.repo_by_item = {}
-        for repo in data["top_repos"][: self.app.top_n]:
-            item_id = tree.insert("", "end", values=(
-                repo["name"],
-                repo.get("stargazers_count", 0),
-                repo.get("forks_count", 0),
-                (repo.get("description") or "")[:80],
-            ))
-            self.repo_by_item[item_id] = repo
+        canvas = tk.Canvas(outer, bg=BLACK, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        list_frame = tk.Frame(canvas, bg=BLACK)
 
-        tree.bind("<<TreeviewSelect>>", self._on_repo_selected)
-        tree.pack(fill="both", expand=True)
+        list_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas_window = canvas.create_window((0, 0), window=list_frame, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(canvas_window, width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
 
-    def _on_repo_selected(self, event):
-        tree = event.widget
-        selection = tree.selection()
-        if not selection:
-            return
-        repo = self.repo_by_item.get(selection[0])
-        if repo:
-            self._show_repo_detail(repo)
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        repos = data["top_repos"][: self.app.top_n]
+        RANK_COLORS = ["#FFD54A", "#D9D9D9", "#C77B3C"]  # gold / silver / bronze for top 3
+
+        for i, repo in enumerate(repos):
+            rank_color = RANK_COLORS[i] if i < 3 else GREY_TEXT
+            card = tk.Frame(list_frame, bg=GREY_PANEL, highlightbackground=GREY_BORDER,
+                             highlightthickness=1)
+            card.pack(fill="x", pady=7)
+
+            inner = tk.Frame(card, bg=GREY_PANEL)
+            inner.pack(fill="both", expand=True, padx=20, pady=16)
+
+            top_row = tk.Frame(inner, bg=GREY_PANEL)
+            top_row.pack(fill="x")
+
+            tk.Label(top_row, text=f"#{i + 1}", font=(MONO_FONT, 18, "bold"),
+                     bg=GREY_PANEL, fg=rank_color).pack(side="left", padx=(0, 14))
+
+            name_col = tk.Frame(top_row, bg=GREY_PANEL)
+            name_col.pack(side="left", fill="x", expand=True)
+            tk.Label(name_col, text=repo["name"], font=(MONO_FONT, 17, "bold"),
+                     bg=GREY_PANEL, fg=WHITE_TXT, anchor="w").pack(fill="x")
+
+            desc = (repo.get("description") or "No description provided.")
+            if len(desc) > 110:
+                desc = desc[:107] + "..."
+            tk.Label(inner, text=desc, font=(MONO_FONT, 10), bg=GREY_PANEL, fg=GREY_TEXT,
+                     anchor="w", justify="left", wraplength=760).pack(fill="x", pady=(8, 12))
+
+            stat_row = tk.Frame(inner, bg=GREY_PANEL)
+            stat_row.pack(fill="x")
+            tk.Label(stat_row, text=f"⭐ {repo.get('stargazers_count', 0):,}",
+                     font=(MONO_FONT, 12, "bold"), bg=GREY_PANEL, fg=WHITE_TXT).pack(side="left", padx=(0, 24))
+            tk.Label(stat_row, text=f"🍴 {repo.get('forks_count', 0):,}",
+                     font=(MONO_FONT, 12, "bold"), bg=GREY_PANEL, fg=WHITE_TXT).pack(side="left", padx=(0, 24))
+            lang = repo.get("language")
+            if lang:
+                tk.Label(stat_row, text=lang, font=(MONO_FONT, 10, "bold"),
+                         bg=GREY_BORDER, fg=WHITE_TXT, padx=10, pady=3).pack(side="right")
+
+            # Whole card is clickable, with a subtle hover highlight
+            clickable_widgets = [card, inner, top_row, name_col, stat_row] + \
+                list(inner.winfo_children()) + list(top_row.winfo_children()) + \
+                list(name_col.winfo_children()) + list(stat_row.winfo_children())
+
+            def on_enter(e, c=card):
+                c.configure(bg=GREY_BORDER, highlightbackground=WHITE_TXT)
+                for w in c.winfo_children():
+                    self._set_bg_recursive(w, GREY_BORDER)
+
+            def on_leave(e, c=card):
+                c.configure(bg=GREY_PANEL, highlightbackground=GREY_BORDER)
+                for w in c.winfo_children():
+                    self._set_bg_recursive(w, GREY_PANEL)
+
+            for w in clickable_widgets:
+                w.bind("<Button-1>", lambda e, r=repo: self._show_repo_detail(r))
+                w.bind("<Enter>", on_enter)
+                w.bind("<Leave>", on_leave)
+                w.configure(cursor="hand2")
+
+    def _set_bg_recursive(self, widget, color):
+        try:
+            # Don't recolor the language-tag chip; it keeps its own accent bg
+            if widget.cget("bg") != GREY_BORDER or widget.master.cget("bg") == GREY_PANEL:
+                widget.configure(bg=color)
+        except tk.TclError:
+            pass
+        for child in widget.winfo_children():
+            self._set_bg_recursive(child, color)
 
     # ------------------------------------------------------------------
     # Repo detail view: full stats + per-repo language chart, opened by
@@ -1183,44 +1264,93 @@ class ResultsScreen(tk.Frame):
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
 
+    # Vivid accent palette (reusing the "bold" tints already defined at the top
+    # of the file) used to make both charts pop against the black/grey theme.
+    CHART_PALETTE = [ACCENT_GREEN, ACCENT_CYAN, BOLD_PINK, BOLD_PEACH,
+                      BOLD_MINT, BOLD_LAVENDER, "#F5D547", "#FF7A7A"]
+
     def _render_charts(self, data):
         self._clear(self.charts_frame)
 
-        fig = Figure(figsize=(9, 4.5), dpi=100, facecolor=BLACK)
+        wrap = tk.Frame(self.charts_frame, bg=BLACK)
+        wrap.pack(fill="both", expand=True, padx=30, pady=24)
+
+        tk.Label(wrap, text="STATISTICS", font=(MONO_FONT, 20, "bold"),
+                 bg=BLACK, fg=WHITE_TXT).pack(anchor="w", pady=(0, 2))
+        tk.Label(wrap, text="Language breakdown and top repos at a glance", font=(MONO_FONT, 10),
+                 bg=BLACK, fg=GREY_TEXT).pack(anchor="w", pady=(0, 16))
+
+        chart_card = tk.Frame(wrap, bg=GREY_PANEL, highlightbackground=GREY_BORDER,
+                               highlightthickness=1)
+        chart_card.pack(fill="both", expand=True)
+
+        fig = Figure(figsize=(10, 5), dpi=100, facecolor=GREY_PANEL)
         ax1 = fig.add_subplot(1, 2, 1)
         ax2 = fig.add_subplot(1, 2, 2)
         for ax in (ax1, ax2):
             ax.set_facecolor(GREY_PANEL)
 
+        palette = self.CHART_PALETTE
+
+        # --- Donut-style language breakdown, bold % labels + a clean legend ---
         langs = data["language_breakdown"]
         if langs:
-            ax1.pie(
-                langs.values(), labels=langs.keys(), autopct="%1.0f%%", startangle=90,
-                textprops={"color": WHITE_TXT, "fontfamily": "monospace"}
+            colors = [palette[i % len(palette)] for i in range(len(langs))]
+            wedges, _texts, autotexts = ax1.pie(
+                langs.values(), startangle=90, colors=colors,
+                autopct=lambda pct: f"{pct:.0f}%" if pct >= 5 else "",
+                pctdistance=0.78, wedgeprops={"width": 0.42, "edgecolor": GREY_PANEL, "linewidth": 2},
             )
-            ax1.set_title("Language Breakdown", color=WHITE_TXT, fontfamily="monospace")
+            for at in autotexts:
+                at.set_color(BLACK)
+                at.set_fontfamily("monospace")
+                at.set_fontweight("bold")
+                at.set_fontsize(10)
+            ax1.set_title("LANGUAGE BREAKDOWN", color=WHITE_TXT, fontfamily="monospace",
+                           fontweight="bold", fontsize=13, pad=14)
+            ax1.legend(
+                wedges, langs.keys(), loc="center left", bbox_to_anchor=(1.02, 0.5),
+                frameon=False, labelcolor=WHITE_TXT, prop={"family": "monospace", "weight": "bold", "size": 9},
+            )
         else:
-            ax1.text(0.5, 0.5, "No language data", ha="center", va="center", color=WHITE_TXT)
+            ax1.text(0.5, 0.5, "No language data", ha="center", va="center",
+                     color=GREY_TEXT, fontfamily="monospace", fontweight="bold")
+            ax1.axis("off")
 
+        # --- Bold horizontal bar chart with value labels at the end of each bar ---
         top_repos = data["top_repos"][:5]
         if top_repos:
-            names = [r["name"] for r in top_repos]
-            stars = [r.get("stargazers_count", 0) for r in top_repos]
-            ax2.barh(names[::-1], stars[::-1], color=WHITE_TXT)
-            ax2.set_title("Top Repos by Stars", color=WHITE_TXT, fontfamily="monospace")
-            ax2.set_xlabel("Stars", color=WHITE_TXT, fontfamily="monospace")
+            names = [r["name"] for r in top_repos][::-1]
+            stars = [r.get("stargazers_count", 0) for r in top_repos][::-1]
+            bar_colors = [palette[i % len(palette)] for i in range(len(names))]
+            bars = ax2.barh(names, stars, color=bar_colors, height=0.6,
+                             edgecolor=BLACK, linewidth=0.8)
+            ax2.set_title("TOP REPOS BY STARS", color=WHITE_TXT, fontfamily="monospace",
+                           fontweight="bold", fontsize=13, pad=14)
             ax2.tick_params(colors=WHITE_TXT)
+            ax2.set_xticks([])
             for spine in ax2.spines.values():
-                spine.set_color(GREY_BORDER)
-            for label in ax2.get_yticklabels() + ax2.get_xticklabels():
+                spine.set_visible(False)
+            for label in ax2.get_yticklabels():
                 label.set_fontfamily("monospace")
+                label.set_fontweight("bold")
+                label.set_fontsize(10)
+            max_star = max(stars) if stars else 1
+            for bar, val in zip(bars, stars):
+                ax2.text(bar.get_width() + max_star * 0.02, bar.get_y() + bar.get_height() / 2,
+                          f"⭐ {val:,}", va="center", ha="left", color=WHITE_TXT,
+                          fontfamily="monospace", fontweight="bold", fontsize=10)
+            ax2.set_xlim(0, max_star * 1.22)
         else:
-            ax2.text(0.5, 0.5, "No repos found", ha="center", va="center", color=WHITE_TXT)
+            ax2.text(0.5, 0.5, "No repos found", ha="center", va="center",
+                      color=GREY_TEXT, fontfamily="monospace", fontweight="bold")
+            ax2.axis("off")
 
         fig.tight_layout()
 
-        canvas = FigureCanvasTkAgg(fig, master=self.charts_frame)
+        canvas = FigureCanvasTkAgg(fig, master=chart_card)
         canvas.draw()
+        canvas.get_tk_widget().configure(bg=GREY_PANEL, highlightthickness=0)
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=20, pady=20)
 
 
