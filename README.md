@@ -1,38 +1,44 @@
 # GitHub Profile Analyzer
 
-A Python tool for analyzing public GitHub profiles — available as both a
-command-line tool and a desktop GUI. Enter any GitHub username and get
-followers/stars/forks stats, a language breakdown, top repositories, and
-visual charts.
+A Python tool for analyzing public GitHub profiles — available as a
+command-line tool and a full desktop GUI app. Enter any GitHub username
+and get a polished, Instagram-style profile view, top repositories with
+per-repo language breakdowns, and visual charts.
 
 ---
 
 ## Features
 
-- **Profile overview** — name, bio, location, followers, following, public
+**Core (CLI + GUI)**
+- Profile overview — name, bio, location, followers, following, public
   repo count, account age
-- **Repository stats** — total stars and forks across all public repos
-- **Language breakdown** — primary language per repo, shown as counts and
-  as a pie chart
-- **Top repositories** — ranked by stars, with fork count and description
-- **Charts** — language pie chart + top-repos bar chart (matplotlib)
-- **Rate-limit friendly** — works without a token (60 requests/hour) or
-  with a personal access token (5,000 requests/hour)
-- **GUI extras**:
-  - Three-screen flow: Search → Loading → Results
-  - Split-screen home layout with a gradient illustration panel
-  - Token field with a show/hide (👁) toggle
-  - Recent searches saved between runs, shown as clickable chips
-  - Animated loading screen so the app never looks frozen while fetching
-  - **Consolidated single-page Overview** — avatar, name, bio, location,
-    follower/following/repo counts, stat cards, and a top-repo highlight
-    all on one scrollable page instead of separate tabs
-  - **Three-dot (⋮) navigation menu** — jump straight to Top Repos or
-    Charts from a compact menu in the header, without hunting through tabs
-  - Circular avatar rendering (via Pillow) for an Instagram-style profile
-    header
-  - Monochrome black/grey/white theme with green accents on the Results
-    screen
+- Repository stats — total stars and forks across all public repos
+- Language breakdown — by repo count (fast) and, per-repo, by actual
+  byte count (precise)
+- Top repositories — ranked by stars, any count you choose
+- Charts — language donut chart + top-repos bar chart
+- Works without a token (60 requests/hour) or with a personal access
+  token (5,000 requests/hour)
+
+**GUI-only**
+- Three-screen flow: Home (search) → Loading → Results
+- Home screen: split gradient/terminal-style panel, moving dot-grid
+  background, recent searches saved between runs, show/hide token toggle
+- Loading screen: retro Windows-95-style chunky block progress bar with
+  live percentage, animated terminal spinner, and 20 rotating GitHub/Git
+  facts to read while it works
+- Results screen: black & grey monochrome theme with a real circular
+  avatar photo, a single-page Instagram-style Overview (profile header,
+  stats, featured top repo), and a "⋮" menu to jump to Top Repos or
+  Charts
+- Click any repo to open a full detail page: stars, forks, watchers,
+  open issues, size, default branch, and a byte-accurate language pie
+  chart fetched just for that repo
+- Click a repo's name (or its card on the Overview page) to open it
+  directly on GitHub in your browser
+- Recent searches and app data are stored in a proper persistent folder
+  (`%APPDATA%\GitHubProfileAnalyzer`), so they survive even when the app
+  is packaged as a standalone `.exe`
 
 ---
 
@@ -44,14 +50,13 @@ github_analyzer/
 ├── cli.py                 Command-line interface
 ├── gui.py                  Desktop GUI (tkinter)
 ├── requirements.txt      Python dependencies
-├── recent_searches.json  Auto-created by the GUI to remember recent usernames
+├── build_exe.bat          One-click script to package gui.py as a .exe
 └── README.md               This file
 ```
 
 `analyzer.py` contains all the GitHub API and data-processing logic, with
 no printing or UI code in it. Both `cli.py` and `gui.py` import from it —
-if you ever fix a bug or add a stat, you only need to change it in one
-place.
+fix a bug or add a stat once, and both interfaces benefit.
 
 ---
 
@@ -62,23 +67,22 @@ place.
    ```
    pip install -r requirements.txt
    ```
-   Dependencies: `requests` (API calls) and `matplotlib` (charts).
+   Dependencies: `requests` (API calls), `matplotlib` (charts), `Pillow`
+   (avatar image processing).
 
 ---
 
 ## Getting a GitHub token (recommended)
 
-Without a token you get 60 requests/hour from GitHub's API — each profile
-analysis uses several requests (profile + paginated repo list), so this
-runs out fast if you're testing repeatedly.
+Without a token you get 60 requests/hour from GitHub's API. Each profile
+analysis uses several requests (profile + paginated repo list + avatar),
+so this runs out fast if you're testing repeatedly.
 
 1. Go to https://github.com/settings/tokens
 2. Click **Generate new token** → **Generate new token (classic)**
 3. No scopes are needed for public data — just name it and generate.
-4. Copy the token. You can:
-   - Paste it into the **Token** field in the GUI (click the 👁 icon to
-     check it was typed correctly), or
-   - Pass it on the command line with `--token`
+4. Paste it into the GUI's **Token** field (click 👁 to check it typed
+   correctly), or pass it to the CLI with `--token`.
 
 ---
 
@@ -91,22 +95,12 @@ python cli.py <username> --charts --top 10
 python cli.py <username> --token ghp_xxxxxxxxxxxx
 ```
 
-**Arguments:**
-
 | Flag         | Description                                      | Default |
 |--------------|---------------------------------------------------|---------|
 | `username`   | GitHub username to analyze (required)             | —       |
 | `--token`    | Personal access token, raises rate limit          | none    |
 | `--charts`   | Generate and display matplotlib charts            | off     |
 | `--top N`    | Number of top repos to display                    | 5       |
-
-With `--charts`, a chart window opens showing the language pie chart and
-top-repos bar chart, and a PNG (`<username>_github_report.png`) is saved
-in the same folder.
-
-**Error handling:** the CLI prints a clear message and exits (rather than
-crashing) if the username doesn't exist, the rate limit is hit, or there's
-a network problem.
 
 ---
 
@@ -116,69 +110,112 @@ a network problem.
 python gui.py
 ```
 
-The GUI has three screens:
+**Home** — search screen with username, optional token, and a top-repos
+counter (1–20). Recent searches appear as clickable chips.
 
-### 1. Home (search)
-Split-screen layout:
-- **Left panel** — a gradient illustration panel (lavender → pink → peach)
-  with the app title, a short feature list, and decorative star/commit
-  doodles.
-- **Right panel** — the actual form: username, optional token (with a
-  show/hide toggle), a "top repos to show" spinbox, and the **Analyze
-  Profile** button.
-- **Recent searches** — after your first successful search, up to 6
-  recent usernames appear as clickable chips under the form. Clicking one
-  re-runs that search immediately. This list is saved to
-  `recent_searches.json` and persists between runs of the app.
+**Loading** — a chunky retro progress bar with a live percentage, an
+animated spinner, and rotating GitHub/Git facts while your data is
+fetched in the background.
 
-### 2. Loading
-Shown while data is being fetched in the background (the window stays
-responsive — fetching happens on a separate thread). Displays an animated
-progress bar and the username being fetched.
+**Results** — the Overview tab is one continuous page: circular avatar,
+Instagram-style stat row, bio, extended stats, and a featured top repo
+card (click it to open that repo on GitHub). Use the **⋮** menu in the
+header to switch to **Top Repos** (click any repo for its full detail
+page + language chart) or **Charts** (language donut + top-repos bar
+chart). **← New Search** returns to Home.
 
-### 3. Results
-The Results screen shows one consolidated view at a time, with a
-**three-dot (⋮) menu** in the top-right of the header for switching
-between them — no tabs to click through:
+---
 
-- **Overview (default view)** — a single scrollable page combining
-  everything about the user:
-  - Circular avatar (cropped with Pillow), name, `@username`, bio, and
-    location at the top
-  - An Instagram-style stat row for public repos / followers / following
-  - Stat cards for total stars, total forks, and account age
-  - A highlighted card for the user's top starred repository
-- **Top Repos** — open via the ⋮ menu; a sortable table with stars,
-  forks, and description for each top repo.
-- **Charts** — open via the ⋮ menu; the language pie chart and
-  top-repos bar chart, embedded directly in the window.
-- A **← New Search** button in the header returns to the Home screen.
+## Packaging as a standalone `.exe`
 
-If something goes wrong (bad username, rate limit, network error), the
-app shows a popup with the error and returns you to the Home screen
-rather than getting stuck on the Loading screen.
+If you want to run this without opening a terminal or having Python
+installed, package it with PyInstaller:
+
+1. Make sure `build_exe.bat`, `gui.py`, and `analyzer.py` are all in the
+   same folder.
+2. Double-click `build_exe.bat` (or run it from a terminal).
+3. Find your app at `dist\GitHubProfileAnalyzer.exe`.
+
+That single file runs standalone on any Windows machine — no Python
+required. See the **Publishing to GitHub** section below for how to
+share it as a downloadable release.
+
+---
+
+## Publishing to GitHub (so others can download it)
+
+### 1. Create a GitHub account and a new repository
+- Sign up at https://github.com if you don't have an account.
+- Click the **+** in the top-right → **New repository**.
+- Name it (e.g. `github-profile-analyzer`), leave it **Public**, and
+  click **Create repository**. Don't initialize it with a README —
+  you already have one.
+
+### 2. Add a `.gitignore`
+Create a file named `.gitignore` in this folder (a template is included
+alongside this README) so build artifacts and personal data don't get
+uploaded.
+
+### 3. Push your code
+Open a terminal in this folder and run:
+```
+git init
+git add .
+git commit -m "Initial commit: GitHub Profile Analyzer"
+git branch -M main
+git remote add origin https://github.com/YOUR-USERNAME/github-profile-analyzer.git
+git push -u origin main
+```
+Replace `YOUR-USERNAME` with your actual GitHub username. If `git` isn't
+installed, get it from https://git-scm.com/downloads first.
+
+Your code is now live at:
+```
+https://github.com/YOUR-USERNAME/github-profile-analyzer
+```
+Anyone can visit that page and click **Code → Download ZIP** to get the
+source, or clone it with:
+```
+git clone https://github.com/YOUR-USERNAME/github-profile-analyzer.git
+```
+
+### 4. (Optional but recommended) Share the `.exe` as a Release
+Source code downloads still require Python + `pip install`. If you want
+people to just download and run the app with zero setup:
+
+1. Build the `.exe` first (see **Packaging** above).
+2. On your repo's GitHub page, click **Releases** (right sidebar) →
+   **Create a new release**.
+3. Give it a tag (e.g. `v1.0`) and a title.
+4. Drag `dist\GitHubProfileAnalyzer.exe` into the "Attach binaries" box.
+5. Click **Publish release**.
+
+Now anyone can go to your repo's **Releases** page and download the
+`.exe` directly — no Python, no terminal, just double-click and run.
+
+### 5. Keep it updated
+Whenever you make changes locally:
+```
+git add .
+git commit -m "Describe what you changed"
+git push
+```
+If you rebuild the `.exe`, upload the new version as a new Release
+(e.g. `v1.1`) so people can get the update.
 
 ---
 
 ## Extending this project
 
-Ideas for next steps, roughly easiest → hardest:
-
-- **Remember the token too** — currently only usernames are saved between
-  runs; the token field resets each time. Could save it (encrypted or in
-  an env var) so you don't retype it.
 - **Compare two users** — fetch two profiles and show them side by side.
-- **Byte-accurate language stats** — currently language breakdown counts
-  *primary* language per repo. The `/repos/{owner}/{repo}/languages`
-  endpoint gives actual byte counts per language per repo, which would be
-  more precise (at the cost of one extra API call per repo).
 - **Commit activity over time** — the
   `/repos/{owner}/{repo}/stats/commit_activity` endpoint returns weekly
-  commit counts, which could be turned into a line chart.
-- **Caching** — save fetched profile data locally (e.g. as JSON) so
-  re-analyzing the same user within a short time doesn't burn API calls.
-- **Package as a `.exe`** — using something like PyInstaller so the GUI
-  can be shared/run without needing Python installed.
+  commit counts, which could become a line chart.
+- **Caching** — save fetched profile data locally so re-analyzing the
+  same user within a short time doesn't burn API calls.
+- **Cross-platform builds** — PyInstaller can also build for macOS/Linux,
+  but you have to run it *on* that OS — a Windows build won't produce a
+  Mac app and vice versa.
 
 ---
 
@@ -186,8 +223,10 @@ Ideas for next steps, roughly easiest → hardest:
 
 | Problem | Likely cause / fix |
 |---|---|
-| `ModuleNotFoundError: No module named 'requests'` (or `matplotlib`) | Run `pip install -r requirements.txt` |
+| `ModuleNotFoundError` for `requests`, `matplotlib`, or `PIL` | Run `pip install -r requirements.txt` |
 | "User not found" error | Double-check the username spelling/case |
 | Rate limit exceeded | Add a token (see above), or wait for the reset time shown in the error |
-| GUI window opens blank/frozen | Make sure you're running `python gui.py` from inside the `github_analyzer` folder, so `gui.py` can find `analyzer.py` |
-| Doodles/gradient look cut off oddly | Try resizing the window — the left panel redraws itself on resize |
+| GUI window opens blank | Run `python gui.py` from inside the `github_analyzer` folder, so it can find `analyzer.py` |
+| Increasing "top repos" past 5 shows no more | Fixed — make sure you're on the latest `analyzer.py` |
+| `.exe` won't build | Make sure PyInstaller installed correctly (`pip install pyinstaller`) and you're running `build_exe.bat` from inside the project folder |
+| `git push` asks for a password and fails | GitHub no longer accepts account passwords for this — use a [Personal Access Token](https://github.com/settings/tokens) as the password instead, or set up SSH keys |
