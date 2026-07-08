@@ -79,7 +79,19 @@ DOT_ACTIVE = "#F2F2F2"
 # Extra-light tints used only for the background doodle cluster
 DOODLE_COLORS = ["#F3ECFB", "#FCE9F1", "#E9F8EF", "#EAF4FD", "#FDF0E6"]
 
-RECENT_SEARCHES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recent_searches.json")
+def get_app_data_dir():
+    """Returns a writable, persistent folder for this app's data.
+    Using the script's own folder (the old approach) breaks once this is
+    packaged into a standalone .exe, since PyInstaller's --onefile mode
+    extracts to a fresh temp folder every run — anything written there
+    is lost the moment the app closes."""
+    base = os.getenv("APPDATA") or os.path.expanduser("~")
+    app_dir = os.path.join(base, "GitHubProfileAnalyzer")
+    os.makedirs(app_dir, exist_ok=True)
+    return app_dir
+
+
+RECENT_SEARCHES_FILE = os.path.join(get_app_data_dir(), "recent_searches.json")
 MAX_RECENT = 6
 
 
@@ -1039,19 +1051,28 @@ class ResultsScreen(tk.Frame):
         for c in range(3):
             grid.grid_columnconfigure(c, weight=1)
 
-        # --- Featured top-repo card ---
+        # --- Featured top-repo card (click anywhere on it to open on GitHub) ---
         tk.Label(pad, text="Top Repository", font=(MONO_FONT, 13, "bold"), bg=BLACK, fg=WHITE_TXT).pack(
             anchor="w", pady=(34, 14)
         )
         top_repos = data.get("top_repos") or []
         if top_repos:
             repo = top_repos[0]
+            html_url = repo.get("html_url", "")
+
             card = tk.Frame(pad, bg=GREY_PANEL, padx=28, pady=24,
-                             highlightbackground=GREY_BORDER, highlightthickness=1)
+                             highlightbackground=GREY_BORDER, highlightthickness=1, cursor="hand2")
             card.pack(fill="x")
-            tk.Label(card, text=repo["name"], font=(MONO_FONT, 15, "bold"), bg=GREY_PANEL, fg=WHITE_TXT).pack(
-                anchor="w"
+
+            name_row = tk.Frame(card, bg=GREY_PANEL)
+            name_row.pack(fill="x", anchor="w")
+            tk.Label(name_row, text=repo["name"], font=(MONO_FONT, 15, "bold"), bg=GREY_PANEL, fg=WHITE_TXT).pack(
+                side="left"
             )
+            tk.Label(name_row, text="↗ open on GitHub", font=(MONO_FONT, 9), bg=GREY_PANEL, fg=GREY_TEXT).pack(
+                side="right"
+            )
+
             if repo.get("description"):
                 tk.Label(card, text=repo["description"], font=(MONO_FONT, 10), bg=GREY_PANEL, fg=GREY_TEXT,
                          wraplength=650, justify="left").pack(anchor="w", pady=(8, 0))
@@ -1061,6 +1082,25 @@ class ResultsScreen(tk.Frame):
                      bg=GREY_PANEL, fg=WHITE_TXT).pack(side="left", padx=(0, 22))
             tk.Label(stat_row, text=f"🍴 {repo.get('forks_count', 0)}", font=(MONO_FONT, 11, "bold"),
                      bg=GREY_PANEL, fg=WHITE_TXT).pack(side="left")
+
+            def _open_repo(event=None, url=html_url):
+                if url:
+                    webbrowser.open(url)
+
+            def _on_enter(event, c=card):
+                c.config(highlightbackground=WHITE_TXT)
+
+            def _on_leave(event, c=card):
+                c.config(highlightbackground=GREY_BORDER)
+
+            # Bind the click/hover to the card itself and every widget inside it,
+            # so clicking anywhere on the card (not just a tiny link) opens GitHub.
+            for widget in [card] + list(card.winfo_children()) + [
+                w for child in card.winfo_children() for w in child.winfo_children()
+            ]:
+                widget.bind("<Button-1>", _open_repo)
+                widget.bind("<Enter>", _on_enter)
+                widget.bind("<Leave>", _on_leave)
         else:
             tk.Label(pad, text="No public repositories found.", font=(MONO_FONT, 11),
                      bg=BLACK, fg=GREY_TEXT).pack(anchor="w")
