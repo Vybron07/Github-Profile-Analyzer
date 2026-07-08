@@ -130,7 +130,10 @@ class GitHubAnalyzer:
             "total_stars": self.total_stars(),
             "total_forks": self.total_forks(),
             "language_breakdown": self.language_breakdown(),
-            "top_repos": self.top_repos(),
+            # Return every repo, sorted by stars — the GUI slices this down
+            # to whatever count the user picked. Capping it here at the old
+            # default of 5 would silently ignore any larger selection.
+            "top_repos": self.top_repos(n=len(self.repos)),
         }
 
     def fetch_avatar_bytes(self) -> bytes:
